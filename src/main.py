@@ -7,13 +7,11 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import threading
 import time
-
-# QUAN TRỌNG: Import cả module để đồng bộ dữ liệu global
 import deception_detection as dd
 from utils import get_video_file
 
 # Global variables
-screen_width = 1200  # Increased for BPM chart
+screen_width = 1200
 screen_height = 600
 recording = None
 bpm_chart_enabled = False
@@ -21,6 +19,7 @@ fig = None
 ax = None
 line = None
 peakpts = None
+last_chart_update = 0
 
 # Colors
 COLOR_BACKGROUND = (20, 20, 20)
@@ -34,7 +33,17 @@ COLOR_CHECKBOX = (100, 100, 100)
 COLOR_CHECKBOX_CHECKED = (0, 200, 0)
 
 
-meter = cv2.imread('D:\\Lie_Detector_Agent\\src\\meter.png')
+meter = None
+try:
+    meter = cv2.imread(r'D:\Lie_Detector_Agent\src\meter.png')
+    if meter is None:
+        meter = np.zeros((50, 400, 3), dtype=np.uint8)
+        # Vẽ meter giả nếu không tìm thấy file
+        cv2.rectangle(meter, (0,0), (100,50), (0,255,0), -1)
+        cv2.rectangle(meter, (100,0), (200,50), (0,255,255), -1)
+        cv2.rectangle(meter, (200,0), (300,50), (0,165,255), -1)
+        cv2.rectangle(meter, (300,0), (400,50), (0,0,255), -1)
+except: pass
 
 def chart_setup():
     """Initialize BPM chart"""
@@ -54,7 +63,6 @@ def chart_setup():
 
     line, = ax.plot([], [], 'cyan', linewidth=1.5, label='Signal')
     peakpts, = ax.plot([], [], 'r+', markersize=8, label='Peaks')
-    # ax.legend(loc='upper right', fontsize=7, facecolor='#2a2a2a', edgecolor='white')
     ax.grid(True, alpha=0.3, color='gray')
 
     plt.tight_layout()
@@ -62,7 +70,7 @@ def chart_setup():
 
 def update_bpm_chart():
     """Update BPM chart with current data"""
-    global fig, ax, line, peakpts
+    global fig, ax, line, peakpts, last_chart_update
 
     if fig is None:
         return None
@@ -72,44 +80,29 @@ def update_bpm_chart():
 
         # Sử dụng dữ liệu từ module dd
         min_len = min(len(dd.hr_times), len(dd.hr_values))
-        # Lấy tối đa 300 điểm dữ liệu gần nhất để vẽ cho nhanh
-        draw_len = min(min_len, 300)
         
+        if min_len < 2: return None
+        
+        draw_len = min(min_len, 300)
         current_times = dd.hr_times[-draw_len:]
         current_values = dd.hr_values[-draw_len:]
 
         line.set_data(current_times, current_values)
 
-        # Cập nhật trục X để hiển thị dữ liệu mới nhất (khoảng 10s cuối)
-        if len(current_times) > 0:
-            last_time = current_times[-1]
-            ax.set_xlim(max(0, last_time - 10), last_time + 0.5)
+        if current_times:
+            ax.set_xlim(max(0, current_times[-1]-10), current_times[-1]+0.5)
+            ymin, ymax = min(current_values), max(current_values)
+            margin = (ymax-ymin)*0.1 if ymax!=ymin else 1.0
+            ax.set_ylim(ymin-margin, ymax+margin)
         
-        ax.relim()
-        ax.autoscale_view(scalex=False, scaley=True)
-
-        # Tìm và vẽ đỉnh (chỉ trên phần dữ liệu đang hiển thị)
         if len(current_values) > 10:
-             # Cần điều chỉnh tham số find_peaks cho phù hợp với tín hiệu thực tế
-             peaks, _ = find_peaks(current_values, distance=5, prominence=0.1)
-             if len(peaks) > 0:
-                 peak_times = [current_times[i] for i in peaks]
-                 peak_vals = [current_values[i] for i in peaks]
-                 peakpts.set_data(peak_times, peak_vals)
-             else:
-                 peakpts.set_data([], [])
-
+             peaks, _ = find_peaks(current_values, distance=5, prominence=np.ptp(current_values)*0.05 or 0.01)
+             peakpts.set_data(np.array(current_times)[peaks], np.array(current_values)[peaks]) if len(peaks) else peakpts.set_data([],[])
         canvas = FigureCanvasAgg(fig)
         canvas.draw()
-        buf = canvas.buffer_rgba()
-        chart_img = np.frombuffer(buf, dtype=np.uint8)
-        chart_img = chart_img.reshape(canvas.get_width_height()[::-1] + (4,))
-        chart_img = cv2.cvtColor(chart_img, cv2.COLOR_RGBA2BGR)
-
-        return chart_img
-    except Exception as e:
-        print(f"Chart error: {e}")
-        return None
+        
+        return cv2.cvtColor(np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8).reshape(canvas.get_width_height()[::-1] + (4,)), cv2.COLOR_RGBA2BGR)
+    except: return None
 
 def add_truth_meter(image, tell_count):
     """Add truth meter overlay to image"""
@@ -152,8 +145,7 @@ def add_truth_meter(image, tell_count):
                              (255, 255, 255), 2)
     except Exception as e:
         print(f"Error adding truth meter: {e}")
-
-
+    
 def draw_button(screen, rect, text, font, is_hovered=False):
     """Draw a button on Pygame surface"""
     color = COLOR_BUTTON_HOVER if is_hovered else COLOR_BUTTON
@@ -183,123 +175,6 @@ def draw_checkbox(screen, rect, is_checked, font, label):
     screen.blit(text_surf, (rect.x + rect.width + 10, rect.y + (rect.height - text_surf.get_height()) // 2))
 
 
-def main_menu():
-    """Main menu interface"""
-    global screen, bpm_chart_enabled
-
-    pygame.init()
-    screen = pygame.display.set_mode((screen_width, screen_height))
-    pygame.display.set_caption('Lie Detector Pro v5.1')
-
-    font = pygame.font.Font(None, 36)
-    title_font = pygame.font.Font(None, 56)
-    subtitle_font = pygame.font.Font(None, 24)
-
-    # Button definitions
-    button_width = 220
-    button_height = 50
-    button_spacing = 20
-    start_y = 180
-    title_y = 50
-    checkbox_size = 30
-
-    center_x = (screen_width - button_width) // 2
-
-    webcam_button = pygame.Rect(center_x, start_y, button_width, button_height)
-    video_button = pygame.Rect(center_x, start_y + button_height + button_spacing, button_width, button_height)
-
-    # Checkboxes
-    checkbox_y = start_y + 2 * (button_height + button_spacing)
-    landmarks_checkbox = pygame.Rect(center_x - 150, checkbox_y, checkbox_size, checkbox_size)
-    record_checkbox = pygame.Rect(center_x - 150, checkbox_y + 40, checkbox_size, checkbox_size)
-    chart_checkbox = pygame.Rect(center_x - 150, checkbox_y + 80, checkbox_size, checkbox_size)
-
-    exit_button = pygame.Rect(center_x, checkbox_y + 140, button_width, button_height)
-
-    # Settings
-    draw_landmarks = False
-    enable_recording = False
-    enable_chart = False
-
-    clock = pygame.time.Clock()
-    running = True
-
-    while running:
-        mouse_pos = pygame.mouse.get_pos()
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if webcam_button.collidepoint(event.pos):
-                    pygame.quit() # Close pygame window entirely before opening opencv
-                    try:
-                        play_webcam(draw_landmarks, enable_recording, enable_chart)
-                    except Exception as e:
-                        print(f"Webcam error: {e}")
-                    pygame.init() # Re-init pygame after opencv closes
-                    screen = pygame.display.set_mode((screen_width, screen_height))
-                    pygame.display.set_caption('Lie Detector Pro v5.1')
-
-                elif video_button.collidepoint(event.pos):
-                    video_file = get_video_file()
-                    if video_file:
-                        pygame.quit() # Close pygame window
-                        try:
-                            play_video(video_file, draw_landmarks, enable_recording, enable_chart)
-                        except Exception as e:
-                            print(f"Video error: {e}")
-                        pygame.init() # Re-init pygame
-                        screen = pygame.display.set_mode((screen_width, screen_height))
-                        pygame.display.set_caption('Lie Detector Pro v5.1')
-
-                elif landmarks_checkbox.collidepoint(event.pos):
-                    draw_landmarks = not draw_landmarks
-
-                elif record_checkbox.collidepoint(event.pos):
-                    enable_recording = not enable_recording
-
-                elif chart_checkbox.collidepoint(event.pos):
-                    enable_chart = not enable_chart
-
-                elif exit_button.collidepoint(event.pos):
-                    running = False
-
-        # Draw
-        if pygame.display.get_surface() is not None: # Check if surface exists
-            screen.fill(COLOR_BACKGROUND)
-
-            # Title
-            title_text = title_font.render("Lie Detector Pro", True, COLOR_TITLE)
-            screen.blit(title_text, (screen_width // 2 - title_text.get_width() // 2, title_y))
-
-            subtitle_text = subtitle_font.render("Advanced Deception Detection System", True, (150, 150, 150))
-            screen.blit(subtitle_text, (screen_width // 2 - subtitle_text.get_width() // 2, title_y + 50))
-
-            # Buttons
-            draw_button(screen, webcam_button, 'Webcam', font, webcam_button.collidepoint(mouse_pos))
-            draw_button(screen, video_button, 'Video File', font, video_button.collidepoint(mouse_pos))
-
-            # Checkboxes
-            draw_checkbox(screen, landmarks_checkbox, draw_landmarks, font, 'Draw Landmarks')
-            draw_checkbox(screen, record_checkbox, enable_recording, font, 'Record Session')
-            draw_checkbox(screen, chart_checkbox, enable_chart, font, 'Show BPM Chart')
-
-            # Exit button
-            exit_color = COLOR_EXIT_BUTTON_HOVER if exit_button.collidepoint(mouse_pos) else COLOR_EXIT_BUTTON
-            pygame.draw.rect(screen, exit_color, exit_button, border_radius=5)
-            pygame.draw.rect(screen, COLOR_TEXT, exit_button, 2, border_radius=5)
-            exit_text = font.render('Exit', True, COLOR_TEXT)
-            screen.blit(exit_text, (exit_button.x + (exit_button.width - exit_text.get_width()) // 2,
-                                    exit_button.y + (exit_button.height - exit_text.get_height()) // 2))
-
-            pygame.display.flip()
-            clock.tick(60)
-
-    pygame.quit()
-
-
 def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False):
     global recording, bpm_chart_enabled, fig
     bpm_chart_enabled = enable_chart
@@ -307,8 +182,8 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         chart_setup()
 
     # Reset data khi bắt đầu phiên mới
-    dd.hr_times = [0.0] * dd.MAX_FRAMES
-    dd.hr_values = [0.0] * dd.MAX_FRAMES
+    dd.hr_times = []
+    dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
     dd.EPOCH = time.time()
 
@@ -384,8 +259,8 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
         chart_setup()
 
     # Reset data
-    dd.hr_times = [0.0] * dd.MAX_FRAMES
-    dd.hr_values = [0.0] * dd.MAX_FRAMES
+    dd.hr_times = []
+    dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
     dd.EPOCH = time.time()
 
@@ -451,6 +326,139 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     if recording: recording.release()
     cv2.destroyAllWindows()
     if fig: plt.close(fig); fig = None
+
+
+def main_menu():
+    """Main menu interface"""
+    global screen, bpm_chart_enabled
+
+    pygame.init()
+    screen = pygame.display.set_mode((screen_width, screen_height))
+    pygame.display.set_caption('Lie Detector Pro v5.1')
+
+    def init_fonts():
+        return (pygame.font.Font(None, 36),
+                pygame.font.Font(None, 56),
+                pygame.font.Font(None, 24))
+
+    font, title_font, subtitle_font = init_fonts()
+
+    # Button definitions
+    button_width = 220
+    button_height = 50
+    button_spacing = 20
+    start_y = 180
+    title_y = 50
+    checkbox_size = 30
+
+    center_x = screen_width // 2
+    button_start_x = center_x - button_width // 2 # Căn giữa nút bấm
+
+    # Cập nhật lại vị trí các nút
+    webcam_button = pygame.Rect(button_start_x, start_y, button_width, button_height)
+    video_button = pygame.Rect(button_start_x, start_y + button_height + button_spacing, button_width, button_height)
+    
+    # Căn giữa nhóm checkbox (ước lượng chiều rộng khoảng 300px để cân đối)
+    checkbox_group_width = 300
+    checkbox_start_x = center_x - checkbox_group_width // 2
+    
+    checkbox_y = start_y + 2 * (button_height + button_spacing)
+    landmarks_checkbox = pygame.Rect(checkbox_start_x, checkbox_y, checkbox_size, checkbox_size)
+    record_checkbox = pygame.Rect(checkbox_start_x, checkbox_y + 40, checkbox_size, checkbox_size)
+    chart_checkbox = pygame.Rect(checkbox_start_x, checkbox_y + 80, checkbox_size, checkbox_size)
+
+    exit_button = pygame.Rect(button_start_x, checkbox_y + 140, button_width, button_height)
+
+    # Settings
+    draw_landmarks = False
+    enable_recording = False
+    enable_chart = False
+
+    clock = pygame.time.Clock()
+    running = True
+
+    while running:
+        mouse_pos = pygame.mouse.get_pos()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if webcam_button.collidepoint(event.pos):
+                    pygame.quit() # Close pygame window entirely before opening opencv
+                    try:
+                        play_webcam(draw_landmarks, enable_recording, enable_chart)
+                    except Exception as e:
+                        print(f"Webcam error: {e}")
+                    time.sleep(0.5)    
+                    pygame.init() 
+                    screen = pygame.display.set_mode((screen_width, screen_height))
+                    pygame.display.set_caption('Lie Detector Pro v5.1')
+                    font, title_font, subtitle_font = init_fonts()
+                    
+                    pygame.event.clear()
+                    
+                elif video_button.collidepoint(event.pos):
+                    video_file = get_video_file()
+                    if video_file:
+                        pygame.quit() # Close pygame window
+                        try:
+                            play_video(video_file, draw_landmarks, enable_recording, enable_chart)
+                        except Exception as e:
+                            print(f"Video error: {e}")
+                        time.sleep(0.5)
+                        
+                        pygame.init() # Re-init pygame
+                        screen = pygame.display.set_mode((screen_width, screen_height))
+                        pygame.display.set_caption('Lie Detector Pro v5.1')
+                        font, title_font, subtitle_font = init_fonts()
+                        pygame.event.clear()
+                        
+                elif landmarks_checkbox.collidepoint(event.pos):
+                    draw_landmarks = not draw_landmarks
+
+                elif record_checkbox.collidepoint(event.pos):
+                    enable_recording = not enable_recording
+
+                elif chart_checkbox.collidepoint(event.pos):
+                    enable_chart = not enable_chart
+
+                elif exit_button.collidepoint(event.pos):
+                    running = False
+
+        # Draw
+        if pygame.display.get_surface() is not None: # Check if surface exists
+            screen.fill(COLOR_BACKGROUND)
+
+            # Title
+            title_text = title_font.render("Lie Detector Pro", True, COLOR_TITLE)
+            screen.blit(title_text, (screen_width // 2 - title_text.get_width() // 2, title_y))
+
+            subtitle_text = subtitle_font.render("Advanced Deception Detection System", True, (150, 150, 150))
+            screen.blit(subtitle_text, (screen_width // 2 - subtitle_text.get_width() // 2, title_y + 50))
+
+            # Buttons
+            draw_button(screen, webcam_button, 'Webcam', font, webcam_button.collidepoint(mouse_pos))
+            draw_button(screen, video_button, 'Video File', font, video_button.collidepoint(mouse_pos))
+
+            # Checkboxes
+            draw_checkbox(screen, landmarks_checkbox, draw_landmarks, font, 'Draw Landmarks')
+            draw_checkbox(screen, record_checkbox, enable_recording, font, 'Record Session')
+            draw_checkbox(screen, chart_checkbox, enable_chart, font, 'Show BPM Chart')
+
+            # Exit button
+            exit_color = COLOR_EXIT_BUTTON_HOVER if exit_button.collidepoint(mouse_pos) else COLOR_EXIT_BUTTON
+            pygame.draw.rect(screen, exit_color, exit_button, border_radius=5)
+            pygame.draw.rect(screen, COLOR_TEXT, exit_button, 2, border_radius=5)
+            exit_text = font.render('Exit', True, COLOR_TEXT)
+            screen.blit(exit_text, (exit_button.x + (exit_button.width - exit_text.get_width()) // 2,
+                                    exit_button.y + (exit_button.height - exit_text.get_height()) // 2))
+
+            pygame.display.flip()
+            clock.tick(60)
+
+    pygame.quit()
 
 
 if __name__ == "__main__":

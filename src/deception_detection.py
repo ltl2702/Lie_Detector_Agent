@@ -17,15 +17,13 @@ TEXT_HEIGHT = 30
 FACEMESH_FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10]
 EPOCH = time.time()
 
-# Global variables for detection
+# Global variables for detection.
 blinks = [False] * MAX_FRAMES
 hand_on_face = [False] * MAX_FRAMES
 face_area_size = 0
-# Initialize with a reasonable size to avoid immediate resizing issues, 
-# but keep it manageable.
-MAX_HISTORY = MAX_FRAMES * 10 
-hr_times = [0.0] * MAX_FRAMES 
-hr_values = [0.0] * MAX_FRAMES
+MAX_HISTORY = MAX_FRAMES * 10
+hr_times = []  # Initialized empty to avoid flatline at start
+hr_values = []
 avg_bpms = [0] * MAX_FRAMES
 gaze_values = [0] * MAX_FRAMES
 emotion_detector = FER(mtcnn=True)
@@ -49,27 +47,15 @@ def smooth(signal, window_size):
     return np.convolve(signal, window, mode='same')
 
 def calculate_bpm(signal, fps, min_bpm=50, max_bpm=150):
-    # Ensure we have enough data for smoothing and peak finding
     if len(signal) < MAX_FRAMES: return None
-
-    # Use only recent frames for current BPM calculation to be responsive
     recent_signal = signal[-MAX_FRAMES:]
     smoothed_signal = smooth(recent_signal, window_size=5)
-    
-    # Adjust distance based on fps, ensuring it's at least 1
     distance = max(1, int(fps / 2.5))
-    
     peaks, _ = find_peaks(smoothed_signal, distance=distance, height=np.mean(smoothed_signal))
-    
-    if len(peaks) < 2:
-        return None
-        
+    if len(peaks) < 2: return None
     peak_intervals = np.diff(peaks) / fps * 60
     valid_peaks = peak_intervals[(peak_intervals >= min_bpm) & (peak_intervals <= max_bpm)]
-    
-    if len(valid_peaks) == 0:
-        return None
-        
+    if len(valid_peaks) == 0: return None
     return np.mean(valid_peaks)
 
 def draw_on_frame(image, face_landmarks, hands_landmarks):
@@ -155,17 +141,12 @@ def get_blink_tell(blinks):
 
 def check_hand_on_face(hands_landmarks, face):
     if hands_landmarks:
-        face_landmarks = [face[p] for p in FACEMESH_FACE_OVAL]
-        face_points = [[[p.x, p.y] for p in face_landmarks]]
+        face_points = [[[face[p].x, face[p].y] for p in FACEMESH_FACE_OVAL]]
         face_contours = np.array(face_points).astype(np.single)
         for hand_landmarks in hands_landmarks:
-            hand = []
-            for point in hand_landmarks.landmark:
-                hand.append((point.x, point.y))
-            for finger in [4, 8, 20]:
-                overlap = cv2.pointPolygonTest(face_contours, hand[finger], False)
-                if overlap != -1:
-                    return True
+            for finger in [8, 12, 16]:
+                point = (hand_landmarks.landmark[finger].x, hand_landmarks.landmark[finger].y)
+                if cv2.pointPolygonTest(face_contours, point, False) >= 0: return True
     return False
 
 def get_avg_gaze(face):
@@ -288,32 +269,19 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
 
 def get_bpm_change_value(image, draw, face_landmarks, hands_landmarks, fps):
     global hr_values, hr_times
-    if face_landmarks:
+    if not face_landmarks: return None
+    try:
         face = face_landmarks.landmark
-        try:
-            cheekL = get_area(image, draw, topL=face[449], topR=face[350], bottomR=face[429], bottomL=face[280])
-            cheekR = get_area(image, draw, topL=face[121], topR=face[229], bottomR=face[50], bottomL=face[209])
+        cheekL = get_area(image, draw, face[449], face[350], face[429], face[280])
+        cheekR = get_area(image, draw, face[121], face[229], face[50], face[209])
+        val = np.average(cheekL[:,:,1:3]) + np.average(cheekR[:,:,1:3])
+        if np.isnan(val): return None
+        
+        hr_values.append(val)
+        hr_times.append(time.time() - EPOCH)
+        if len(hr_values) > MAX_HISTORY:
+            hr_values.pop(0)
+            hr_times.pop(0)
             
-            cheekLwithoutBlue = np.average(cheekL[:, :, 1:3])
-            cheekRwithoutBlue = np.average(cheekR[:, :, 1:3])
-            
-            if np.isnan(cheekLwithoutBlue) or np.isnan(cheekRwithoutBlue): return None
-
-            # Update with new data
-            current_val = cheekLwithoutBlue + cheekRwithoutBlue
-            current_time = time.time() - EPOCH
-            
-            hr_values.append(current_val)
-            hr_times.append(current_time)
-            
-            # Maintain history size to avoid memory issues but keep enough for charting
-            if len(hr_values) > MAX_HISTORY:
-                hr_values = hr_values[-MAX_HISTORY:]
-                hr_times = hr_times[-MAX_HISTORY:]
-            
-            if fps is None: fps = 30.0 
-            return calculate_bpm(hr_values, fps)
-        except Exception as e:
-            print(f"Error in BPM calculation: {e}")
-            return None
-    return None
+        return calculate_bpm(hr_values, fps or 30.0)
+    except: return None
