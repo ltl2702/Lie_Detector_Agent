@@ -5,6 +5,7 @@ from scipy.spatial import distance as dist
 from fer import FER
 import threading
 import time
+import mediapipe as mp
 
 # Constants and global variables
 MAX_FRAMES = 120
@@ -20,8 +21,11 @@ EPOCH = time.time()
 blinks = [False] * MAX_FRAMES
 hand_on_face = [False] * MAX_FRAMES
 face_area_size = 0
-hr_times = list(range(0, MAX_FRAMES))
-hr_values = [400] * MAX_FRAMES
+# Initialize with a reasonable size to avoid immediate resizing issues, 
+# but keep it manageable.
+MAX_HISTORY = MAX_FRAMES * 10 
+hr_times = [0.0] * MAX_FRAMES 
+hr_values = [0.0] * MAX_FRAMES
 avg_bpms = [0] * MAX_FRAMES
 gaze_values = [0] * MAX_FRAMES
 emotion_detector = FER(mtcnn=True)
@@ -45,18 +49,30 @@ def smooth(signal, window_size):
     return np.convolve(signal, window, mode='same')
 
 def calculate_bpm(signal, fps, min_bpm=50, max_bpm=150):
-    signal = smooth(signal, window_size=5)
-    peaks, _ = find_peaks(signal, distance=fps/2.5, height=0.05)
+    # Ensure we have enough data for smoothing and peak finding
+    if len(signal) < MAX_FRAMES: return None
+
+    # Use only recent frames for current BPM calculation to be responsive
+    recent_signal = signal[-MAX_FRAMES:]
+    smoothed_signal = smooth(recent_signal, window_size=5)
+    
+    # Adjust distance based on fps, ensuring it's at least 1
+    distance = max(1, int(fps / 2.5))
+    
+    peaks, _ = find_peaks(smoothed_signal, distance=distance, height=np.mean(smoothed_signal))
+    
     if len(peaks) < 2:
         return None
+        
     peak_intervals = np.diff(peaks) / fps * 60
     valid_peaks = peak_intervals[(peak_intervals >= min_bpm) & (peak_intervals <= max_bpm)]
+    
     if len(valid_peaks) == 0:
         return None
+        
     return np.mean(valid_peaks)
 
 def draw_on_frame(image, face_landmarks, hands_landmarks):
-    import mediapipe as mp
     mp_drawing = mp.solutions.drawing_utils
     mp_drawing_styles = mp.solutions.drawing_styles
     if face_landmarks:
@@ -170,7 +186,11 @@ def get_gaze(face, iris_L_side, iris_R_side, eye_L_corner, eye_R_corner):
 def detect_gaze_change(avg_gaze):
     global gaze_values
     gaze_values = gaze_values[1:] + [avg_gaze]
-    gaze_relative_matches = 1.0 * gaze_values.count(avg_gaze) / MAX_FRAMES
+    # Keep gaze_values from growing indefinitely
+    if len(gaze_values) > MAX_FRAMES:
+        gaze_values = gaze_values[-MAX_FRAMES:]
+        
+    gaze_relative_matches = 1.0 * gaze_values.count(avg_gaze) / len(gaze_values)
     if gaze_relative_matches < .01:
         return gaze_relative_matches
     return 0
@@ -180,29 +200,15 @@ def get_lip_ratio(face):
 
 def get_mood(image):
     global emotion_detector, calculating_mood, mood
-    detected_mood, score = emotion_detector.top_emotion(image)
-    calculating_mood = False
-    if score and (score > .4 or detected_mood == 'neutral'):
-        mood = detected_mood
-        return mood
-
-def get_emotions(image):
-    global emotion_detector
-    emotion_data = {
-        "angry": 0,
-        "disgust": 0,
-        "fear": 0,
-        "happy": 0,
-        "sad": 0,
-        "surprise": 0,
-        "neutral": 0
-    }
-    emotions = emotion_detector.detect_emotions(image)
-    if emotions:
-        for emotion in emotions:
-            for key in emotion["emotions"]:
-                emotion_data[key] += emotion["emotions"][key]
-    return emotion_data
+    try:
+        detected_mood, score = emotion_detector.top_emotion(image)
+        if score and (score > .4 or detected_mood == 'neutral'):
+            mood = detected_mood
+    except Exception as e:
+        print(f"Error in mood detection: {e}")
+    finally:
+        calculating_mood = False
+    return mood
 
 def get_face_relative_area(face):
     face_width = abs(max(face[454].x, 0) - max(face[234].x, 0))
@@ -222,48 +228,92 @@ def find_face_and_hands(image_original, face_mesh, hands):
 
 def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=None, ttl_for_tells=30):
     global tells, calculating_mood
-    global blinks, hand_on_face, face_area_size
+    global blinks, hand_on_face, face_area_size, avg_bpms
+
     tells = decrement_tells(tells)
     if face_landmarks:
         face = face_landmarks.landmark
         face_area_size = get_face_relative_area(face)
+
         if not calculating_mood:
             emothread = threading.Thread(target=get_mood, args=(image,))
             emothread.start()
             calculating_mood = True
-        cheekL = get_area(image, False, topL=face[449], topR=face[350], bottomR=face[429], bottomL=face[280])
-        cheekR = get_area(image, False, topL=face[121], topR=face[229], bottomR=face[50], bottomL=face[209])
+
         bpm = get_bpm_change_value(image, False, face_landmarks, hands_landmarks, fps)
-        bpm_display = f"BPM: {bpm:.2f}" if bpm else "BPM: ..."
-        tells['avg_bpms'] = new_tell(bpm_display, ttl_for_tells)
-        if bpm:
-            bpm_delta = bpm - avg_bpms[-1]
-            if abs(bpm_delta) > SIGNIFICANT_BPM_CHANGE:
-                change_desc = "Heart rate increasing" if bpm_delta > 0 else "Heart rate decreasing"
-                tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
+
+        if bpm is not None:
+            tells['avg_bpms'] = new_tell(f"BPM: {int(bpm)}", ttl_for_tells)
+
+            if len(avg_bpms) > RECENT_FRAMES:
+                recent_avg = sum(avg_bpms[-RECENT_FRAMES:]) / RECENT_FRAMES
+                bpm_delta = bpm - recent_avg
+
+                if abs(bpm_delta) > SIGNIFICANT_BPM_CHANGE:
+                    change_desc = "Heart rate increasing" if bpm_delta > 0 else "Heart rate decreasing"
+                    tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
+
+            avg_bpms.append(bpm)
+            if len(avg_bpms) > MAX_HISTORY:
+                avg_bpms = avg_bpms[-MAX_HISTORY:]
+        else:
+            tells['avg_bpms'] = new_tell("BPM: ...", ttl_for_tells)
+
         blinks = blinks[1:] + [is_blinking(face)]
+        # Maintain blinks list size
+        if len(blinks) > MAX_FRAMES:
+            blinks = blinks[-MAX_FRAMES:]
+            
         recent_blink_tell = get_blink_tell(blinks)
         if recent_blink_tell:
             tells['blinking'] = new_tell(recent_blink_tell, ttl_for_tells)
+
         recent_hand_on_face = check_hand_on_face(hands_landmarks, face)
         hand_on_face = hand_on_face[1:] + [recent_hand_on_face]
+        # Maintain hand_on_face list size
+        if len(hand_on_face) > MAX_FRAMES:
+            hand_on_face = hand_on_face[-MAX_FRAMES:]
+            
         if recent_hand_on_face:
             tells['hand'] = new_tell("Hand covering face", ttl_for_tells)
+
         avg_gaze = get_avg_gaze(face)
         if detect_gaze_change(avg_gaze):
             tells['gaze'] = new_tell("Change in gaze", ttl_for_tells)
+
         if get_lip_ratio(face) < LIP_COMPRESSION_RATIO:
             tells['lips'] = new_tell("Lip compression", ttl_for_tells)
+
     return tells
 
 def get_bpm_change_value(image, draw, face_landmarks, hands_landmarks, fps):
+    global hr_values, hr_times
     if face_landmarks:
         face = face_landmarks.landmark
-        cheekL = get_area(image, draw, topL=face[449], topR=face[350], bottomR=face[429], bottomL=face[280])
-        cheekR = get_area(image, draw, topL=face[121], topR=face[229], bottomR=face[50], bottomL=face[209])
-        global hr_values
-        cheekLwithoutBlue = np.average(cheekL[:, :, 1:3])
-        cheekRwithoutBlue = np.average(cheekR[:, :, 1:3])
-        hr_values = hr_values[1:] + [cheekLwithoutBlue + cheekRwithoutBlue]
-    bpm = calculate_bpm(hr_values, fps)
-    return bpm
+        try:
+            cheekL = get_area(image, draw, topL=face[449], topR=face[350], bottomR=face[429], bottomL=face[280])
+            cheekR = get_area(image, draw, topL=face[121], topR=face[229], bottomR=face[50], bottomL=face[209])
+            
+            cheekLwithoutBlue = np.average(cheekL[:, :, 1:3])
+            cheekRwithoutBlue = np.average(cheekR[:, :, 1:3])
+            
+            if np.isnan(cheekLwithoutBlue) or np.isnan(cheekRwithoutBlue): return None
+
+            # Update with new data
+            current_val = cheekLwithoutBlue + cheekRwithoutBlue
+            current_time = time.time() - EPOCH
+            
+            hr_values.append(current_val)
+            hr_times.append(current_time)
+            
+            # Maintain history size to avoid memory issues but keep enough for charting
+            if len(hr_values) > MAX_HISTORY:
+                hr_values = hr_values[-MAX_HISTORY:]
+                hr_times = hr_times[-MAX_HISTORY:]
+            
+            if fps is None: fps = 30.0 
+            return calculate_bpm(hr_values, fps)
+        except Exception as e:
+            print(f"Error in BPM calculation: {e}")
+            return None
+    return None

@@ -58,7 +58,7 @@ emotion_detector = FER(mtcnn=True)
 calculating_mood = False
 mood = ''
 
-meter = cv2.imread('meter.png')
+meter = cv2.imread('D:/Lie_Detector_Agent/src/meter.png')
 
 # BPM chart
 fig = None
@@ -420,6 +420,11 @@ def get_mood(image):
 
 
 def add_truth_meter(image, tell_count):
+  global meter
+  
+  if meter is None:
+    return  # Skip if meter couldn't be created
+    
   width = image.shape[1]
   sm = int(width / 64)
   bg = int(width / 3.2)
