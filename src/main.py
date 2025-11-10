@@ -185,6 +185,10 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     dd.hr_times = []
     dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
+    dd.mood = ''
+    dd.mood_history = []
+    dd.mood_frames_count = 0
+    dd.calculating_mood = False
     dd.EPOCH = time.time()
 
     mp_face_mesh = mp.solutions.face_mesh
@@ -262,6 +266,10 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     dd.hr_times = []
     dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
+    dd.mood = ''
+    dd.mood_history = []
+    dd.mood_frames_count = 0
+    dd.calculating_mood = False
     dd.EPOCH = time.time()
 
     mp_face_mesh = mp.solutions.face_mesh
@@ -386,34 +394,23 @@ def main_menu():
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if webcam_button.collidepoint(event.pos):
-                    pygame.quit() # Close pygame window entirely before opening opencv
+                    pygame.quit()
                     try:
                         play_webcam(draw_landmarks, enable_recording, enable_chart)
                     except Exception as e:
                         print(f"Webcam error: {e}")
-                    time.sleep(0.5)    
-                    pygame.init() 
-                    screen = pygame.display.set_mode((screen_width, screen_height))
-                    pygame.display.set_caption('Lie Detector Pro v5.1')
-                    font, title_font, subtitle_font = init_fonts()
-                    
-                    pygame.event.clear()
+                    return
                     
                 elif video_button.collidepoint(event.pos):
                     video_file = get_video_file()
                     if video_file:
-                        pygame.quit() # Close pygame window
+                        # Đóng cửa sổ menu pygame
+                        pygame.quit()
                         try:
                             play_video(video_file, draw_landmarks, enable_recording, enable_chart)
                         except Exception as e:
                             print(f"Video error: {e}")
-                        time.sleep(0.5)
-                        
-                        pygame.init() # Re-init pygame
-                        screen = pygame.display.set_mode((screen_width, screen_height))
-                        pygame.display.set_caption('Lie Detector Pro v5.1')
-                        font, title_font, subtitle_font = init_fonts()
-                        pygame.event.clear()
+                        return
                         
                 elif landmarks_checkbox.collidepoint(event.pos):
                     draw_landmarks = not draw_landmarks
