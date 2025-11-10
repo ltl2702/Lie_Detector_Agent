@@ -407,39 +407,65 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+    
+    # Auto-adjust calibration time based on video duration
+    CALIBRATION_TIME = min(10, duration * 0.5)  # 50% of video duration, max 10s
+    
+    # Frame skipping for better performance
+    target_fps = 15  # Process at 15 FPS instead of original FPS
+    frame_skip = max(1, int(fps / target_fps))
+    effective_fps = fps / frame_skip
+    
+    print(f"Video Info: {fps} FPS, {w}x{h}, {total_frames} frames, Duration: {duration:.1f}s")
+    print(f"Calibration: {CALIBRATION_TIME:.1f}s, Processing: {effective_fps:.1f} FPS (skip every {frame_skip} frames)")
 
     if enable_recording:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"analyzed_{timestamp}.avi"
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        recording = cv2.VideoWriter(filename, fourcc, 10, (w, h))
+        recording = cv2.VideoWriter(filename, fourcc, effective_fps, (w, h))
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh, \
          mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
 
         calibrated = False
         frame_count = 0
+        processed_count = 0
         paused = False
-        calibration_start_time = time.time()
-        CALIBRATION_TIME = 120  # 2 minutes in seconds
+        calibration_start_frame = 0
         
         while cap.isOpened():
             if not paused:
                 success, image = cap.read()
-                if not success: break
+                if not success:
+                    print(f"\n{'='*60}")
+                    print(f"Video ended at frame {frame_count}/{total_frames}")
+                    print(f"Processed {processed_count} frames")
+                    print(f"Calibrated: {calibrated}")
+                    print(f"{'='*60}\n")
+                    break
+                
+                frame_count += 1
+                
+                # Skip frames for better performance
+                if frame_count % frame_skip != 0:
+                    continue
+                
+                processed_count += 1
                 
                 face_landmarks, hands_landmarks = dd.find_face_and_hands(image, face_mesh, hands)
-                current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, fps)
+                current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, effective_fps)
 
                 if draw_landmarks:
                     dd.draw_on_frame(image, face_landmarks, hands_landmarks)
                 
-                # Determine banner height to pass to add_text and add_truth_meter
                 banner_height = 0
 
                 if not calibrated:
-                    # Calculate elapsed and remaining time
-                    elapsed_time = time.time() - calibration_start_time
+                    # Calculate elapsed and remaining time based on processed frames
+                    elapsed_time = (processed_count - calibration_start_frame) / effective_fps
                     remaining_time = max(0, CALIBRATION_TIME - elapsed_time)
                     minutes = int(remaining_time // 60)
                     seconds = int(remaining_time % 60)
@@ -532,24 +558,31 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     chart_img = update_bpm_chart()
                     if chart_img is not None:
                         ch, cw = chart_img.shape[:2]
-                        x_off = image.shape[1] - cw - 10  # 10px từ bên phải
-                        y_off = image.shape[0] - ch - 50  # 50px từ dưới lên
+                        x_off = image.shape[1] - cw - 10
+                        y_off = image.shape[0] - ch - 50
                         if x_off > 0 and y_off > 0 and y_off + ch < image.shape[0]:
                             image[y_off:y_off+ch, x_off:x_off+cw] = chart_img
 
-                frame_count += 1
+                # Progress indicator
+                progress_text = f"Frame: {frame_count}/{total_frames} | Processing: {processed_count} | Phase: {'CALIBRATION' if not calibrated else 'INTERROGATION'}"
+                cv2.putText(image, progress_text, 
+                           (10, image.shape[0] - 10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             cv2.imshow('Lie Detector - Video Analysis', image)
-            if enable_recording and recording and not paused: recording.write(image)
+            if enable_recording and recording and not paused: 
+                recording.write(image)
 
-            key = cv2.waitKey(int(1000/fps)) & 0xFF
+            # Simplified timing
+            key = cv2.waitKey(1) & 0xFF
+                
             if key == 27: break
-            elif key == ord(' '): paused = not paused
+            elif key == ord(' '): 
+                paused = not paused
             elif key == ord('c'):
-                # Manual calibration toggle
                 calibrated = not calibrated
                 if not calibrated:
-                    calibration_start_time = time.time()  # Reset timer
+                    calibration_start_frame = processed_count
             if cv2.getWindowProperty('Lie Detector - Video Analysis', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
@@ -620,19 +653,30 @@ def main_menu():
                     try:
                         play_webcam(draw_landmarks, enable_recording, enable_chart)
                     except Exception as e:
+                        import traceback
                         print(f"Webcam error: {e}")
+                        traceback.print_exc()
                     return
                     
                 elif video_button.collidepoint(event.pos):
+                    # Minimize pygame window to avoid blocking file dialog
+                    pygame.display.iconify()
+                    pygame.event.pump()  # Process events
+                    
                     video_file = get_video_file()
+                    
                     if video_file:
-                        # Đóng cửa sổ menu pygame
                         pygame.quit()
                         try:
                             play_video(video_file, draw_landmarks, enable_recording, enable_chart)
                         except Exception as e:
+                            import traceback
                             print(f"Video error: {e}")
+                            traceback.print_exc()
                         return
+                    else:
+                        # If no file selected, restore window
+                        pygame.display.flip()
                         
                 elif landmarks_checkbox.collidepoint(event.pos):
                     draw_landmarks = not draw_landmarks
