@@ -2,6 +2,7 @@ import pygame
 import cv2
 import mediapipe as mp
 import numpy as np
+import os
 from datetime import datetime
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -10,6 +11,7 @@ import time
 import deception_detection as dd
 from utils import get_video_file
 import alert_system as alerts
+import review_mode
 
 # Global variables
 screen_width = 1200
@@ -219,6 +221,11 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     if enable_chart:
         chart_setup()
 
+    # Initialize review session if recording
+    review_session = None
+    if enable_recording:
+        review_session = review_mode.ReviewSession()
+
     # Reset data khi bắt đầu phiên mới
     dd.hr_times = []
     dd.hr_values = []
@@ -245,6 +252,9 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         filename = f"interrogation_{timestamp}.avi"
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         recording = cv2.VideoWriter(filename, fourcc, 10, (1280, 720))
+        if review_session:
+            review_session.video_file = filename
+            review_session.fps = 10
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh, \
          mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
@@ -311,6 +321,8 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 # Automatic transition when time is up
                 if remaining_time <= 0:
                     calibrated = True
+                    if review_session:
+                        review_session.set_calibration_complete()
                     print("\n" + "="*60)
                     print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
                     print("="*60 + "\n")
@@ -347,6 +359,15 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 
                 # Process tells through alert system (clustering + priority)
                 alert = alerts.process_indicators(current_tells, stress_level)
+                
+                # Track in review session
+                if review_session and calibrated:
+                    review_session.add_event(current_tells, stress_level, 
+                                            alert.confidence if alert else 0.0, frame_count)
+                    if alert:
+                        review_session.add_key_moment(alert.indicators, alert.confidence, 
+                                                     "alert_cluster")
+                
                 alert_x = image.shape[1] - 350
                 if alert:
                     # High confidence alert: visual + audio cue
@@ -380,7 +401,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 if chart_img is not None:
                     h, w = chart_img.shape[:2]
                     x_off = image.shape[1] - w - 10 
-                    y_off = image.shape[0] - h - 50  
+                    y_off = image.shape[0] - h - 110  # Moved up to avoid black bar in review mode
                     if x_off > 0 and y_off > 0 and y_off + h < image.shape[0]:
                         image[y_off:y_off+h, x_off:x_off+w] = chart_img
 
@@ -395,10 +416,21 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 calibrated = not calibrated
                 if not calibrated:
                     calibration_start_time = time.time()  # Reset timer
+            elif key == ord('b'):  # Bookmark key moment
+                if review_session and calibrated:
+                    review_session.add_manual_marker("Manual bookmark")
+                    print("⭐ Key moment bookmarked")
             if cv2.getWindowProperty('Lie Detector - Webcam', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
     if recording: recording.release()
+    
+    # Save review session
+    if review_session:
+        review_session.print_summary()
+        session_file = review_session.save()
+        print(f"\n💾 Review session saved: {session_file}")
+    
     cv2.destroyAllWindows()
     if fig: plt.close(fig); fig = None
 
@@ -407,6 +439,12 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     bpm_chart_enabled = enable_chart
     if enable_chart:
         chart_setup()
+
+    # Initialize review session if recording
+    review_session = None
+    if enable_recording:
+        review_session = review_mode.ReviewSession()
+        review_session.video_file = video_file
 
     # Reset data
     dd.hr_times = []
@@ -443,6 +481,8 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
         filename = f"analyzed_{timestamp}.avi"
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         recording = cv2.VideoWriter(filename, fourcc, effective_fps, (w, h))
+        if review_session:
+            review_session.fps = effective_fps
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh, \
          mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
@@ -523,6 +563,8 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     # Automatic transition when time is up
                     if remaining_time <= 0:
                         calibrated = True
+                        if review_session:
+                            review_session.set_calibration_complete()
                         print("\n" + "="*60)
                         print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
                         print("="*60 + "\n")
@@ -559,6 +601,15 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     
                     # Process tells through alert system (clustering + priority)
                     alert = alerts.process_indicators(current_tells, stress_level)
+                    
+                    # Track in review session
+                    if review_session:
+                        review_session.add_event(current_tells, stress_level,
+                                                alert.confidence if alert else 0.0, processed_count)
+                        if alert:
+                            review_session.add_key_moment(alert.indicators, alert.confidence,
+                                                         "alert_cluster")
+                    
                     alert_x = image.shape[1] - 350
                     if alert:
                         text = alerts.overlay_text_for_alert(alert)
@@ -590,7 +641,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     if chart_img is not None:
                         ch, cw = chart_img.shape[:2]
                         x_off = image.shape[1] - cw - 10
-                        y_off = image.shape[0] - ch - 50
+                        y_off = image.shape[0] - ch - 110  # Moved up to avoid black bar in review mode
                         if x_off > 0 and y_off > 0 and y_off + ch < image.shape[0]:
                             image[y_off:y_off+ch, x_off:x_off+cw] = chart_img
 
@@ -614,10 +665,21 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                 calibrated = not calibrated
                 if not calibrated:
                     calibration_start_frame = processed_count
+            elif key == ord('b'):  # Bookmark
+                if review_session and calibrated:
+                    review_session.add_manual_marker("Manual bookmark")
+                    print("⭐ Key moment bookmarked")
             if cv2.getWindowProperty('Lie Detector - Video Analysis', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
     if recording: recording.release()
+    
+    # Save review session
+    if review_session:
+        review_session.print_summary()
+        session_file = review_session.save()
+        print(f"\n💾 Review session saved: {session_file}")
+    
     cv2.destroyAllWindows()
     if fig: plt.close(fig); fig = None
 
@@ -651,12 +713,13 @@ def main_menu():
     # Cập nhật lại vị trí các nút
     webcam_button = pygame.Rect(button_start_x, start_y, button_width, button_height)
     video_button = pygame.Rect(button_start_x, start_y + button_height + button_spacing, button_width, button_height)
+    review_button = pygame.Rect(button_start_x, start_y + 2 * (button_height + button_spacing), button_width, button_height)
     
     # Căn giữa nhóm checkbox (ước lượng chiều rộng khoảng 300px để cân đối)
     checkbox_group_width = 300
     checkbox_start_x = center_x - checkbox_group_width // 2
     
-    checkbox_y = start_y + 2 * (button_height + button_spacing)
+    checkbox_y = start_y + 3 * (button_height + button_spacing)
     landmarks_checkbox = pygame.Rect(checkbox_start_x, checkbox_y, checkbox_size, checkbox_size)
     record_checkbox = pygame.Rect(checkbox_start_x, checkbox_y + 40, checkbox_size, checkbox_size)
     chart_checkbox = pygame.Rect(checkbox_start_x, checkbox_y + 80, checkbox_size, checkbox_size)
@@ -708,6 +771,44 @@ def main_menu():
                     else:
                         # If no file selected, restore window
                         pygame.display.flip()
+                
+                elif review_button.collidepoint(event.pos):
+                    # Load and review a saved session
+                    pygame.display.iconify()
+                    pygame.event.pump()
+                    
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes('-topmost', True)
+                    
+                    session_file = filedialog.askopenfilename(
+                        title="Select Review Session",
+                        filetypes=[
+                            ("JSON files", "*.json"),
+                            ("All files", "*.*")
+                        ]
+                    )
+                    root.destroy()
+                    
+                    if session_file:
+                        # Load session and get video file
+                        session = review_mode.ReviewSession.load(session_file)
+                        if session.video_file and os.path.exists(session.video_file):
+                            pygame.quit()
+                            try:
+                                review_mode.play_review(session.video_file, session_file)
+                            except Exception as e:
+                                import traceback
+                                print(f"Review error: {e}")
+                                traceback.print_exc()
+                            return
+                        else:
+                            print("Video file not found!")
+                            pygame.display.flip()
+                    else:
+                        pygame.display.flip()
                         
                 elif landmarks_checkbox.collidepoint(event.pos):
                     draw_landmarks = not draw_landmarks
@@ -735,6 +836,7 @@ def main_menu():
             # Buttons
             draw_button(screen, webcam_button, 'Webcam', font, webcam_button.collidepoint(mouse_pos))
             draw_button(screen, video_button, 'Video File', font, video_button.collidepoint(mouse_pos))
+            draw_button(screen, review_button, 'Review Mode', font, review_button.collidepoint(mouse_pos))
 
             # Checkboxes
             draw_checkbox(screen, landmarks_checkbox, draw_landmarks, font, 'Draw Landmarks')

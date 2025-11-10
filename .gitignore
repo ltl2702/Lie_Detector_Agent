@@ -4,3 +4,4 @@ src/__pycache__/
 *.log
 docs
 *.avi
+*.json
