@@ -119,16 +119,26 @@ def draw_on_frame(image, face_landmarks, hands_landmarks):
                 mp_drawing_styles.get_default_hand_landmarks_style(),
                 mp_drawing_styles.get_default_hand_connections_style())
 
-def add_text(image, tells, calibrated):
+def add_text(image, tells, calibrated, banner_height=0):
+    """
+    Add text overlays to image
+    banner_height: height of top banner to offset text below it
+    """
     global mood
-    text_y = TEXT_HEIGHT
-    # Hiển thị mood ở góc phải trên
+    # Offset cho text bắt đầu sau banner - tăng thêm khoảng cách
+    start_y = banner_height + 40 if banner_height > 0 else TEXT_HEIGHT
+    text_y = start_y
+    
+    # Hiển thị mood ở góc phải hơn, sau banner và xuống dưới hơn
+    mood_x = int(.70 * image.shape[1])  # Dịch sang phải từ 65% lên 70%
+    mood_y = start_y + 10  # Thêm 10px xuống dưới
+    
     if mood:
         mood_text = "Mood: {}".format(mood)
-        write(mood_text, image, int(.65 * image.shape[1]), TEXT_HEIGHT)
+        write(mood_text, image, mood_x, mood_y)
     else:
         # Hiển thị "Detecting..." nếu chưa có mood
-        write("Mood: Detecting...", image, int(.65 * image.shape[1]), TEXT_HEIGHT)
+        write("Mood: Detecting...", image, mood_x, mood_y)
     
     if calibrated:
         for tell in tells.values():

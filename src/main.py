@@ -104,8 +104,11 @@ def update_bpm_chart():
         return cv2.cvtColor(np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8).reshape(canvas.get_width_height()[::-1] + (4,)), cv2.COLOR_RGBA2BGR)
     except: return None
 
-def add_truth_meter(image, tell_count):
-    """Add truth meter overlay to image"""
+def add_truth_meter(image, tell_count, banner_height=0):
+    """
+    Add truth meter overlay to image
+    banner_height: height of top banner to position meter below it
+    """
     global meter
 
     if meter is None:
@@ -126,8 +129,8 @@ def add_truth_meter(image, tell_count):
     try:
         resized_meter = cv2.resize(meter, (meter_width, meter_height), interpolation=cv2.INTER_AREA)
 
-        # Position at top
-        y_pos = sm
+        # Position below banner with more offset
+        y_pos = banner_height + 40 if banner_height > 0 else sm
         x_pos = bg
 
         # Ensure we don't exceed image bounds
@@ -213,6 +216,9 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         
         calibrated = False
         frame_count = 0
+        calibration_start_time = time.time()
+        # CALIBRATION_TIME = 120  # 2 minutes in seconds
+        CALIBRATION_TIME = 20  # 20s in seconds
         while cap.isOpened():
             success, image = cap.read()
             if not success: continue
@@ -223,14 +229,75 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
 
             if draw_landmarks:
                 dd.draw_on_frame(image, face_landmarks, hands_landmarks)
-            dd.add_text(image, current_tells, calibrated)
-            add_truth_meter(image, len(current_tells))
+            
+            # Determine banner height to pass to add_text and add_truth_meter
+            banner_height = 0
 
             if not calibrated:
-                progress = min(100, int(frame_count / dd.MAX_FRAMES * 100))
-                cv2.putText(image, f"Calibrating... {progress}%", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+                # Calculate elapsed and remaining time
+                elapsed_time = time.time() - calibration_start_time
+                remaining_time = max(0, CALIBRATION_TIME - elapsed_time)
+                minutes = int(remaining_time // 60)
+                seconds = int(remaining_time % 60)
+                
+                # Draw banner AT TOP
+                overlay = image.copy()
+                banner_height = 100
+                banner_y_start = 0  # Start at very top
+                cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
+                
+                # Phase 1 title and timer on same line
+                phase_text = "PHASE 1: CALIBRATION"
+                cv2.putText(image, phase_text, 
+                           (10, banner_y_start + 35), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+                
+                # Timer display next to title
+                timer_text = f"TIME: {minutes:02d}:{seconds:02d}"
+                cv2.putText(image, timer_text, 
+                           (image.shape[1] - 280, banner_y_start + 35), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 3)
+                
+                # Instruction text on second line
+                cv2.putText(image, "Ask neutral questions only - Establishing baseline", 
+                           (10, banner_y_start + 75), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+                # Progress bar at bottom
+                progress = min(1.0, elapsed_time / CALIBRATION_TIME)
+                bar_width = int(image.shape[1] * 0.8)
+                bar_x = int(image.shape[1] * 0.1)
+                bar_y = image.shape[0] - 60
+                cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (50, 50, 50), -1)
+                cv2.rectangle(image, (bar_x, bar_y), (bar_x + int(bar_width * progress), bar_y + 30), (0, 255, 255), -1)
+                cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (255, 255, 255), 2)
+                
+                # Automatic transition when time is up
+                if remaining_time <= 0:
+                    calibrated = True
+                    print("\n" + "="*60)
+                    print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
+                    print("="*60 + "\n")
             else:
-                cv2.putText(image, "CALIBRATED", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                # Phase 2 banner AT TOP
+                overlay = image.copy()
+                banner_height = 70
+                banner_y_start = 0
+                cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+                
+                # Interrogation mode indicator
+                cv2.putText(image, "PHASE 2: INTERROGATION MODE - ACTIVE", 
+                           (10, banner_y_start + 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 3)
+                cv2.putText(image, "Deception detection enabled", 
+                           (10, banner_y_start + 60), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            
+            # Add truth meter and text BELOW banner
+            dd.add_text(image, current_tells, calibrated, banner_height)
+            add_truth_meter(image, len(current_tells), banner_height)
 
             if enable_chart and calibrated:
                 chart_img = update_bpm_chart()
@@ -241,14 +308,17 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                     if x_off > 0 and y_off > 0 and y_off + h < image.shape[0]:
                         image[y_off:y_off+h, x_off:x_off+w] = chart_img
 
-            if frame_count >= dd.MAX_FRAMES: calibrated = True
             cv2.imshow('Lie Detector - Webcam', image)
             if enable_recording and recording: recording.write(image)
             frame_count += 1
 
             key = cv2.waitKey(5) & 0xFF
             if key == 27: break
-            elif key == ord('c'): calibrated = not calibrated
+            elif key == ord('c'): 
+                # Manual calibration toggle
+                calibrated = not calibrated
+                if not calibrated:
+                    calibration_start_time = time.time()  # Reset timer
             if cv2.getWindowProperty('Lie Detector - Webcam', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
@@ -291,6 +361,9 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
         calibrated = False
         frame_count = 0
         paused = False
+        calibration_start_time = time.time()
+        CALIBRATION_TIME = 120  # 2 minutes in seconds
+        
         while cap.isOpened():
             if not paused:
                 success, image = cap.read()
@@ -301,14 +374,75 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
 
                 if draw_landmarks:
                     dd.draw_on_frame(image, face_landmarks, hands_landmarks)
-                dd.add_text(image, current_tells, calibrated)
-                add_truth_meter(image, len(current_tells))
+                
+                # Determine banner height to pass to add_text and add_truth_meter
+                banner_height = 0
 
                 if not calibrated:
-                    progress = min(100, int(frame_count / dd.MAX_FRAMES * 100))
-                    cv2.putText(image, f"Calibrating... {progress}%", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+                    # Calculate elapsed and remaining time
+                    elapsed_time = time.time() - calibration_start_time
+                    remaining_time = max(0, CALIBRATION_TIME - elapsed_time)
+                    minutes = int(remaining_time // 60)
+                    seconds = int(remaining_time % 60)
+                    
+                    # Draw banner AT TOP
+                    overlay = image.copy()
+                    banner_height = 100
+                    banner_y_start = 0  # Start at very top
+                    cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
+                    
+                    # Phase 1 title and timer on same line
+                    phase_text = "PHASE 1: CALIBRATION"
+                    cv2.putText(image, phase_text, 
+                               (10, banner_y_start + 35), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+                    
+                    # Timer display next to title
+                    timer_text = f"TIME: {minutes:02d}:{seconds:02d}"
+                    cv2.putText(image, timer_text, 
+                               (image.shape[1] - 280, banner_y_start + 35), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 3)
+                    
+                    # Instruction text on second line
+                    cv2.putText(image, "Ask neutral questions only - Establishing baseline", 
+                               (10, banner_y_start + 75), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    
+                    # Progress bar at bottom
+                    progress = min(1.0, elapsed_time / CALIBRATION_TIME)
+                    bar_width = int(image.shape[1] * 0.8)
+                    bar_x = int(image.shape[1] * 0.1)
+                    bar_y = image.shape[0] - 60
+                    cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (50, 50, 50), -1)
+                    cv2.rectangle(image, (bar_x, bar_y), (bar_x + int(bar_width * progress), bar_y + 30), (0, 255, 255), -1)
+                    cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (255, 255, 255), 2)
+                    
+                    # Automatic transition when time is up
+                    if remaining_time <= 0:
+                        calibrated = True
+                        print("\n" + "="*60)
+                        print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
+                        print("="*60 + "\n")
                 else:
-                    cv2.putText(image, "CALIBRATED", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                    # Phase 2 banner AT TOP
+                    overlay = image.copy()
+                    banner_height = 70
+                    banner_y_start = 0
+                    cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+                    
+                    # Interrogation mode indicator
+                    cv2.putText(image, "PHASE 2: INTERROGATION MODE - ACTIVE", 
+                               (10, banner_y_start + 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 3)
+                    cv2.putText(image, "Deception detection enabled", 
+                               (10, banner_y_start + 60), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Add truth meter and text BELOW banner
+                dd.add_text(image, current_tells, calibrated, banner_height)
+                add_truth_meter(image, len(current_tells), banner_height)
 
                 if enable_chart and calibrated:
                     chart_img = update_bpm_chart()
@@ -319,7 +453,6 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                         if x_off > 0 and y_off > 0 and y_off + ch < image.shape[0]:
                             image[y_off:y_off+ch, x_off:x_off+cw] = chart_img
 
-                if frame_count >= dd.MAX_FRAMES: calibrated = True
                 frame_count += 1
 
             cv2.imshow('Lie Detector - Video Analysis', image)
@@ -328,6 +461,11 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
             key = cv2.waitKey(int(1000/fps)) & 0xFF
             if key == 27: break
             elif key == ord(' '): paused = not paused
+            elif key == ord('c'):
+                # Manual calibration toggle
+                calibrated = not calibrated
+                if not calibrated:
+                    calibration_start_time = time.time()  # Reset timer
             if cv2.getWindowProperty('Lie Detector - Video Analysis', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
