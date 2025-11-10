@@ -149,6 +149,40 @@ def add_truth_meter(image, tell_count, banner_height=0):
     except Exception as e:
         print(f"Error adding truth meter: {e}")
     
+def get_stress_level(tells_count, bpm_change=0):
+    """
+    Calculate stress level based on number of tells and BPM change
+    Returns: (level_text, color, severity_int)
+    """
+    # Exclude BPM from tells count for severity calculation
+    actual_tells = max(0, tells_count - 1)
+    
+    # Calculate severity score (0-100)
+    severity_score = 0
+    
+    # Tells contribute 15 points each
+    severity_score += actual_tells * 15
+    
+    # BPM change contributes up to 30 points
+    if abs(bpm_change) > 20:
+        severity_score += 30
+    elif abs(bpm_change) > 15:
+        severity_score += 20
+    elif abs(bpm_change) > 10:
+        severity_score += 10
+    
+    # Cap at 100
+    severity_score = min(100, severity_score)
+    
+    # Determine level
+    if severity_score < 30:
+        return ("LOW STRESS", (0, 255, 0), 1)  # Green
+    elif severity_score < 60:
+        return ("MEDIUM STRESS", (0, 165, 255), 2)  # Orange
+    else:
+        return ("HIGH STRESS - ALERT", (0, 0, 255), 3)  # Red
+
+
 def draw_button(screen, rect, text, font, is_hovered=False):
     """Draw a button on Pygame surface"""
     color = COLOR_BUTTON_HOVER if is_hovered else COLOR_BUTTON
@@ -280,20 +314,45 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                     print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
                     print("="*60 + "\n")
             else:
-                # Phase 2 banner AT TOP
+                # Phase 2: INTERROGATION MODE
+                # Calculate stress level
+                bpm_change = 0
+                if len(dd.avg_bpms) > 1 and dd.avg_bpms[-1] > 0:
+                    bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
+                
+                stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                
+                # Phase 2 banner AT TOP with dynamic color based on stress
                 overlay = image.copy()
-                banner_height = 70
+                banner_height = 100
                 banner_y_start = 0
                 cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
                 cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
                 
-                # Interrogation mode indicator
+                # Title
                 cv2.putText(image, "PHASE 2: INTERROGATION MODE - ACTIVE", 
-                           (10, banner_y_start + 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 3)
-                cv2.putText(image, "Deception detection enabled", 
-                           (10, banner_y_start + 60), 
+                           (10, banner_y_start + 25), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
+                # Ready indicator
+                cv2.putText(image, "CALIBRATED - Ready for interrogation", 
+                           (10, banner_y_start + 50), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Stress level indicator with color coding
+                cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
+                           (10, banner_y_start + 80), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
+                
+                # Real-time deviation alerts on the right
+                if len(current_tells) > 1:  # More than just BPM
+                    alert_x = image.shape[1] - 350
+                    cv2.putText(image, "DEVIATION DETECTED!", 
+                               (alert_x, banner_y_start + 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    cv2.putText(image, f"Active Tells: {len(current_tells) - 1}", 
+                               (alert_x, banner_y_start + 60), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
             
             # Add truth meter and text BELOW banner
             dd.add_text(image, current_tells, calibrated, banner_height)
@@ -425,20 +484,45 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                         print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
                         print("="*60 + "\n")
                 else:
-                    # Phase 2 banner AT TOP
+                    # Phase 2: INTERROGATION MODE
+                    # Calculate stress level
+                    bpm_change = 0
+                    if len(dd.avg_bpms) > 1 and dd.avg_bpms[-1] > 0:
+                        bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
+                    
+                    stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                    
+                    # Phase 2 banner AT TOP with dynamic color based on stress
                     overlay = image.copy()
-                    banner_height = 70
+                    banner_height = 100
                     banner_y_start = 0
                     cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
                     cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
                     
-                    # Interrogation mode indicator
+                    # Title
                     cv2.putText(image, "PHASE 2: INTERROGATION MODE - ACTIVE", 
-                               (10, banner_y_start + 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 3)
-                    cv2.putText(image, "Deception detection enabled", 
-                               (10, banner_y_start + 60), 
+                               (10, banner_y_start + 25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    
+                    # Ready indicator
+                    cv2.putText(image, "CALIBRATED - Ready for interrogation", 
+                               (10, banner_y_start + 50), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    # Stress level indicator with color coding
+                    cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
+                               (10, banner_y_start + 80), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
+                    
+                    # Real-time deviation alerts on the right
+                    if len(current_tells) > 1:  # More than just BPM
+                        alert_x = image.shape[1] - 350
+                        cv2.putText(image, "DEVIATION DETECTED!", 
+                                   (alert_x, banner_y_start + 30), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}", 
+                                   (alert_x, banner_y_start + 60), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                 
                 # Add truth meter and text BELOW banner
                 dd.add_text(image, current_tells, calibrated, banner_height)
