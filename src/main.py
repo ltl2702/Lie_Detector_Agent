@@ -9,6 +9,7 @@ import threading
 import time
 import deception_detection as dd
 from utils import get_video_file
+import alert_system as alerts
 
 # Global variables
 screen_width = 1200
@@ -344,15 +345,31 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            (10, banner_y_start + 80), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                 
-                # Real-time deviation alerts on the right
-                if len(current_tells) > 1:  # More than just BPM
-                    alert_x = image.shape[1] - 350
-                    cv2.putText(image, "DEVIATION DETECTED!", 
-                               (alert_x, banner_y_start + 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    cv2.putText(image, f"Active Tells: {len(current_tells) - 1}", 
-                               (alert_x, banner_y_start + 60), 
+                # Process tells through alert system (clustering + priority)
+                alert = alerts.process_indicators(current_tells, stress_level)
+                alert_x = image.shape[1] - 350
+                if alert:
+                    # High confidence alert: visual + audio cue
+                    text = alerts.overlay_text_for_alert(alert)
+                    cv2.putText(image, text,
+                               (alert_x, banner_y_start + 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                               (alert_x, banner_y_start + 60),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    try:
+                        alerts.play_alert_sound()
+                    except Exception:
+                        pass
+                else:
+                    # Lower-confidence visual hint (keep previous behavior)
+                    if len(current_tells) > 1:
+                        cv2.putText(image, "DEVIATION DETECTED!",
+                                   (alert_x, banner_y_start + 30),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                                   (alert_x, banner_y_start + 60),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
             
             # Add truth meter and text BELOW banner
             dd.add_text(image, current_tells, calibrated, banner_height)
@@ -540,15 +557,29 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                (10, banner_y_start + 80), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                     
-                    # Real-time deviation alerts on the right
-                    if len(current_tells) > 1:  # More than just BPM
-                        alert_x = image.shape[1] - 350
-                        cv2.putText(image, "DEVIATION DETECTED!", 
-                                   (alert_x, banner_y_start + 30), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}", 
-                                   (alert_x, banner_y_start + 60), 
+                    # Process tells through alert system (clustering + priority)
+                    alert = alerts.process_indicators(current_tells, stress_level)
+                    alert_x = image.shape[1] - 350
+                    if alert:
+                        text = alerts.overlay_text_for_alert(alert)
+                        cv2.putText(image, text,
+                                   (alert_x, banner_y_start + 30),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                                   (alert_x, banner_y_start + 60),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                        try:
+                            alerts.play_alert_sound()
+                        except Exception:
+                            pass
+                    else:
+                        if len(current_tells) > 1:
+                            cv2.putText(image, "DEVIATION DETECTED!",
+                                       (alert_x, banner_y_start + 30),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                            cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                                       (alert_x, banner_y_start + 60),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                 
                 # Add truth meter and text BELOW banner
                 dd.add_text(image, current_tells, calibrated, banner_height)
