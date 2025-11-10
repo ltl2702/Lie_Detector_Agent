@@ -223,34 +223,34 @@ def get_mood(image):
         calculating_mood = False
         
         if detected_mood and score:
-            # Tăng ngưỡng confidence lên 0.6 để chỉ chấp nhận kết quả tin cậy
-            if score > 0.60:
+            # Giảm ngưỡng confidence xuống 0.5 để phát hiện nhanh hơn
+            if score > 0.50:
                 # Thêm vào lịch sử
                 mood_history.append(detected_mood)
                 
-                # Giữ tối đa 10 kết quả gần nhất
-                if len(mood_history) > 10:
-                    mood_history = mood_history[-10:]
+                # Giữ tối đa 6 kết quả gần nhất (giảm từ 10)
+                if len(mood_history) > 6:
+                    mood_history = mood_history[-6:]
                 
-                # Chỉ cập nhật mood nếu có ít nhất 5 kết quả
-                if len(mood_history) >= 5:
+                # Chỉ cần 3 kết quả để bắt đầu phát hiện (giảm từ 5)
+                if len(mood_history) >= 3:
                     # Đếm mood nào xuất hiện nhiều nhất
                     from collections import Counter
                     mood_counter = Counter(mood_history)
                     most_common_mood, count = mood_counter.most_common(1)[0]
                     
-                    # Chỉ cập nhật nếu mood chiếm ít nhất 60% trong lịch sử
-                    if count >= len(mood_history) * 0.6:
+                    # Chỉ cần 50% consistency (giảm từ 60%)
+                    if count >= len(mood_history) * 0.5:
                         if mood != most_common_mood:
                             print(f"Mood changed: {most_common_mood} (confidence: {score:.2f}, consistency: {count}/{len(mood_history)})")
                             mood = most_common_mood
                         return mood
-            elif detected_mood == 'neutral' and score > 0.4:
-                # Neutral dễ phát hiện hơn, giữ ngưỡng thấp hơn
+            elif detected_mood == 'neutral' and score > 0.35:
+                # Neutral dễ phát hiện hơn, giảm ngưỡng xuống 0.35
                 mood_history.append(detected_mood)
-                if len(mood_history) > 10:
-                    mood_history = mood_history[-10:]
-                if len(mood_history) >= 3:
+                if len(mood_history) > 6:
+                    mood_history = mood_history[-6:]
+                if len(mood_history) >= 2:  # Chỉ cần 2 kết quả cho neutral
                     from collections import Counter
                     mood_counter = Counter(mood_history)
                     most_common_mood, count = mood_counter.most_common(1)[0]
@@ -307,9 +307,9 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
         face = face_landmarks.landmark
         face_area_size = get_face_relative_area(face)
         
-        # Chỉ phát hiện mood mỗi 10 frames để giảm nhiễu
+        # Chỉ phát hiện mood mỗi 5 frames (nhanh hơn) để giảm nhiễu
         mood_frames_count += 1
-        if not calculating_mood and mood_frames_count >= 10:
+        if not calculating_mood and mood_frames_count >= 5:
             mood_frames_count = 0
             emothread = threading.Thread(target=get_mood, args=(image,))
             emothread.start()

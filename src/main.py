@@ -236,9 +236,9 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 chart_img = update_bpm_chart()
                 if chart_img is not None:
                     h, w = chart_img.shape[:2]
-                    x_off = image.shape[1] - w - 10
-                    y_off = 10
-                    if x_off > 0 and y_off + h < image.shape[0]:
+                    x_off = image.shape[1] - w - 10 
+                    y_off = image.shape[0] - h - 50  
+                    if x_off > 0 and y_off > 0 and y_off + h < image.shape[0]:
                         image[y_off:y_off+h, x_off:x_off+w] = chart_img
 
             if frame_count >= dd.MAX_FRAMES: calibrated = True
@@ -314,9 +314,9 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     chart_img = update_bpm_chart()
                     if chart_img is not None:
                         ch, cw = chart_img.shape[:2]
-                        x_off = image.shape[1] - cw - 10
-                        y_off = 10
-                        if x_off > 0 and y_off + ch < image.shape[0]:
+                        x_off = image.shape[1] - cw - 10  # 10px từ bên phải
+                        y_off = image.shape[0] - ch - 50  # 50px từ dưới lên
+                        if x_off > 0 and y_off > 0 and y_off + ch < image.shape[0]:
                             image[y_off:y_off+ch, x_off:x_off+cw] = chart_img
 
                 if frame_count >= dd.MAX_FRAMES: calibrated = True
