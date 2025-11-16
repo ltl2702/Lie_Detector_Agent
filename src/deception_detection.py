@@ -22,13 +22,15 @@ blinks = [False] * MAX_FRAMES
 hand_on_face = [False] * MAX_FRAMES
 face_area_size = 0
 MAX_HISTORY = MAX_FRAMES * 10
-hr_times = []  # Initialized empty to avoid flatline at start
+hr_times = []  
 hr_values = []
 avg_bpms = [0] * MAX_FRAMES
 gaze_values = [0] * MAX_FRAMES
 emotion_detector = FER(mtcnn=True)
 calculating_mood = False
 mood = ''
+mood_history = []  # Lưu lịch sử mood để làm mượt
+mood_frames_count = 0  # Đếm số frame để giảm tần suất phát hiện
 tells = dict()
 
 def decrement_tells(tells):
@@ -47,18 +49,46 @@ def smooth(signal, window_size):
     return np.convolve(signal, window, mode='same')
 
 def calculate_bpm(signal, fps, min_bpm=50, max_bpm=150):
-    if len(signal) < MAX_FRAMES: return None
-    recent_signal = signal[-MAX_FRAMES:]
-    smoothed_signal = smooth(recent_signal, window_size=5)
-    distance = max(1, int(fps / 2.5))
-    peaks, _ = find_peaks(smoothed_signal, distance=distance, height=np.mean(smoothed_signal))
-    if len(peaks) < 2: return None
-    peak_intervals = np.diff(peaks) / fps * 60
-    valid_peaks = peak_intervals[(peak_intervals >= min_bpm) & (peak_intervals <= max_bpm)]
-    if len(valid_peaks) == 0: return None
-    return np.mean(valid_peaks)
+    if len(signal) < 30:  # Cần ít nhất 30 mẫu
+        return None
+    
+    try:
+        # Chuẩn hóa tín hiệu
+        signal_array = np.array(signal)
+        signal_normalized = (signal_array - np.mean(signal_array)) / (np.std(signal_array) + 1e-6)
+        
+        # Làm mượt tín hiệu
+        signal_smooth = smooth(signal_normalized, window_size=min(5, len(signal_normalized) // 2))
+        
+        # Tìm peaks với các tham số linh hoạt hơn
+        min_distance = max(int(fps * 60 / max_bpm), 10)  # Khoảng cách tối thiểu giữa các peaks
+        
+        peaks, properties = find_peaks(signal_smooth, 
+                                        distance=min_distance,
+                                        prominence=0.3)  # Giảm prominence để dễ phát hiện hơn
+        
+        if len(peaks) < 2:
+            return None
+        
+        # Tính BPM từ khoảng cách giữa các peaks
+        peak_intervals = np.diff(peaks) / fps  # Thời gian giữa các peaks (giây)
+        bpms = 60.0 / peak_intervals  # Chuyển sang BPM
+        
+        # Lọc các giá trị BPM hợp lệ
+        valid_bpms = bpms[(bpms >= min_bpm) & (bpms <= max_bpm)]
+        
+        if len(valid_bpms) == 0:
+            return None
+        
+        # Trả về BPM trung bình
+        avg_bpm = np.mean(valid_bpms)
+        return float(avg_bpm)
+    except Exception as e:
+        print(f"Error in calculate_bpm: {e}")
+        return None
 
 def draw_on_frame(image, face_landmarks, hands_landmarks):
+    import mediapipe as mp
     mp_drawing = mp.solutions.drawing_utils
     mp_drawing_styles = mp.solutions.drawing_styles
     if face_landmarks:
@@ -89,11 +119,27 @@ def draw_on_frame(image, face_landmarks, hands_landmarks):
                 mp_drawing_styles.get_default_hand_landmarks_style(),
                 mp_drawing_styles.get_default_hand_connections_style())
 
-def add_text(image, tells, calibrated):
+def add_text(image, tells, calibrated, banner_height=0):
+    """
+    Add text overlays to image
+    banner_height: height of top banner to offset text below it
+    """
     global mood
-    text_y = TEXT_HEIGHT
+    # Offset cho text bắt đầu sau banner - tăng thêm khoảng cách
+    start_y = banner_height + 40 if banner_height > 0 else TEXT_HEIGHT
+    text_y = start_y
+    
+    # Hiển thị mood ở góc phải hơn, sau banner và xuống dưới hơn
+    mood_x = int(.70 * image.shape[1])  # Dịch sang phải từ 65% lên 70%
+    mood_y = start_y + 10  # Thêm 10px xuống dưới
+    
     if mood:
-        write("Mood: {}".format(mood), image, int(.75 * image.shape[1]), TEXT_HEIGHT)
+        mood_text = "Mood: {}".format(mood)
+        write(mood_text, image, mood_x, mood_y)
+    else:
+        # Hiển thị "Detecting..." nếu chưa có mood
+        write("Mood: Detecting...", image, mood_x, mood_y)
+    
     if calibrated:
         for tell in tells.values():
             write(tell['text'], image, 10, text_y)
@@ -141,12 +187,17 @@ def get_blink_tell(blinks):
 
 def check_hand_on_face(hands_landmarks, face):
     if hands_landmarks:
-        face_points = [[[face[p].x, face[p].y] for p in FACEMESH_FACE_OVAL]]
+        face_landmarks = [face[p] for p in FACEMESH_FACE_OVAL]
+        face_points = [[[p.x, p.y] for p in face_landmarks]]
         face_contours = np.array(face_points).astype(np.single)
         for hand_landmarks in hands_landmarks:
-            for finger in [8, 12, 16]:
-                point = (hand_landmarks.landmark[finger].x, hand_landmarks.landmark[finger].y)
-                if cv2.pointPolygonTest(face_contours, point, False) >= 0: return True
+            hand = []
+            for point in hand_landmarks.landmark:
+                hand.append((point.x, point.y))
+            for finger in [4, 8, 20]:
+                overlap = cv2.pointPolygonTest(face_contours, hand[finger], False)
+                if overlap != -1:
+                    return True
     return False
 
 def get_avg_gaze(face):
@@ -167,11 +218,7 @@ def get_gaze(face, iris_L_side, iris_R_side, eye_L_corner, eye_R_corner):
 def detect_gaze_change(avg_gaze):
     global gaze_values
     gaze_values = gaze_values[1:] + [avg_gaze]
-    # Keep gaze_values from growing indefinitely
-    if len(gaze_values) > MAX_FRAMES:
-        gaze_values = gaze_values[-MAX_FRAMES:]
-        
-    gaze_relative_matches = 1.0 * gaze_values.count(avg_gaze) / len(gaze_values)
+    gaze_relative_matches = 1.0 * gaze_values.count(avg_gaze) / MAX_FRAMES
     if gaze_relative_matches < .01:
         return gaze_relative_matches
     return 0
@@ -180,16 +227,71 @@ def get_lip_ratio(face):
     return get_aspect_ratio(face[0], face[17], face[61], face[291])
 
 def get_mood(image):
-    global emotion_detector, calculating_mood, mood
+    global emotion_detector, calculating_mood, mood, mood_history
     try:
         detected_mood, score = emotion_detector.top_emotion(image)
-        if score and (score > .4 or detected_mood == 'neutral'):
-            mood = detected_mood
+        calculating_mood = False
+        
+        if detected_mood and score:
+            # Giảm ngưỡng confidence xuống 0.5 để phát hiện nhanh hơn
+            if score > 0.50:
+                # Thêm vào lịch sử
+                mood_history.append(detected_mood)
+                
+                # Giữ tối đa 6 kết quả gần nhất (giảm từ 10)
+                if len(mood_history) > 6:
+                    mood_history = mood_history[-6:]
+                
+                # Chỉ cần 3 kết quả để bắt đầu phát hiện (giảm từ 5)
+                if len(mood_history) >= 3:
+                    # Đếm mood nào xuất hiện nhiều nhất
+                    from collections import Counter
+                    mood_counter = Counter(mood_history)
+                    most_common_mood, count = mood_counter.most_common(1)[0]
+                    
+                    # Chỉ cần 50% consistency (giảm từ 60%)
+                    if count >= len(mood_history) * 0.5:
+                        if mood != most_common_mood:
+                            print(f"Mood changed: {most_common_mood} (confidence: {score:.2f}, consistency: {count}/{len(mood_history)})")
+                            mood = most_common_mood
+                        return mood
+            elif detected_mood == 'neutral' and score > 0.35:
+                # Neutral dễ phát hiện hơn, giảm ngưỡng xuống 0.35
+                mood_history.append(detected_mood)
+                if len(mood_history) > 6:
+                    mood_history = mood_history[-6:]
+                if len(mood_history) >= 2:  # Chỉ cần 2 kết quả cho neutral
+                    from collections import Counter
+                    mood_counter = Counter(mood_history)
+                    most_common_mood, count = mood_counter.most_common(1)[0]
+                    if count >= len(mood_history) * 0.5 and most_common_mood == 'neutral':
+                        if mood != 'neutral':
+                            print(f"Mood changed: neutral (confidence: {score:.2f})")
+                            mood = 'neutral'
+                        return mood
+        calculating_mood = False
     except Exception as e:
-        print(f"Error in mood detection: {e}")
-    finally:
+        print(f"Error detecting mood: {e}")
         calculating_mood = False
     return mood
+    
+def get_emotions(image):
+    global emotion_detector
+    emotion_data = {
+        "angry": 0,
+        "disgust": 0,
+        "fear": 0,
+        "happy": 0,
+        "sad": 0,
+        "surprise": 0,
+        "neutral": 0
+    }
+    emotions = emotion_detector.detect_emotions(image)
+    if emotions:
+        for emotion in emotions:
+            for key in emotion["emotions"]:
+                emotion_data[key] += emotion["emotions"][key]
+    return emotion_data
 
 def get_face_relative_area(face):
     face_width = abs(max(face[454].x, 0) - max(face[234].x, 0))
@@ -208,80 +310,88 @@ def find_face_and_hands(image_original, face_mesh, hands):
     return face_landmarks, hands_landmarks
 
 def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=None, ttl_for_tells=30):
-    global tells, calculating_mood
-    global blinks, hand_on_face, face_area_size, avg_bpms
-
+    global tells, calculating_mood, mood_frames_count
+    global blinks, hand_on_face, face_area_size
     tells = decrement_tells(tells)
     if face_landmarks:
         face = face_landmarks.landmark
         face_area_size = get_face_relative_area(face)
-
-        if not calculating_mood:
+        
+        # Chỉ phát hiện mood mỗi 5 frames (nhanh hơn) để giảm nhiễu
+        mood_frames_count += 1
+        if not calculating_mood and mood_frames_count >= 5:
+            mood_frames_count = 0
             emothread = threading.Thread(target=get_mood, args=(image,))
             emothread.start()
             calculating_mood = True
-
-        bpm = get_bpm_change_value(image, False, face_landmarks, hands_landmarks, fps)
-
-        if bpm is not None:
-            tells['avg_bpms'] = new_tell(f"BPM: {int(bpm)}", ttl_for_tells)
-
-            if len(avg_bpms) > RECENT_FRAMES:
-                recent_avg = sum(avg_bpms[-RECENT_FRAMES:]) / RECENT_FRAMES
-                bpm_delta = bpm - recent_avg
-
-                if abs(bpm_delta) > SIGNIFICANT_BPM_CHANGE:
-                    change_desc = "Heart rate increasing" if bpm_delta > 0 else "Heart rate decreasing"
-                    tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
-
-            avg_bpms.append(bpm)
-            if len(avg_bpms) > MAX_HISTORY:
-                avg_bpms = avg_bpms[-MAX_HISTORY:]
-        else:
-            tells['avg_bpms'] = new_tell("BPM: ...", ttl_for_tells)
-
-        blinks = blinks[1:] + [is_blinking(face)]
-        # Maintain blinks list size
-        if len(blinks) > MAX_FRAMES:
-            blinks = blinks[-MAX_FRAMES:]
             
+        cheekL = get_area(image, False, topL=face[449], topR=face[350], bottomR=face[429], bottomL=face[280])
+        cheekR = get_area(image, False, topL=face[121], topR=face[229], bottomR=face[50], bottomL=face[209])
+        bpm = get_bpm_change_value(image, False, face_landmarks, hands_landmarks, fps)
+        
+        # Hiển thị số mẫu đã thu thập khi chưa đủ dữ liệu
+        if bpm:
+            bpm_display = f"BPM: {bpm:.1f}"
+        else:
+            samples_collected = len(hr_values)
+            if samples_collected < 60:
+                bpm_display = f"BPM: Collecting... ({samples_collected}/60)"
+            else:
+                bpm_display = "BPM: Calculating..."
+        
+        tells['avg_bpms'] = new_tell(bpm_display, ttl_for_tells)
+        if bpm:
+            bpm_delta = bpm - avg_bpms[-1]
+            if abs(bpm_delta) > SIGNIFICANT_BPM_CHANGE:
+                change_desc = "Heart rate increasing" if bpm_delta > 0 else "Heart rate decreasing"
+                tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
+        blinks = blinks[1:] + [is_blinking(face)]
         recent_blink_tell = get_blink_tell(blinks)
         if recent_blink_tell:
             tells['blinking'] = new_tell(recent_blink_tell, ttl_for_tells)
-
         recent_hand_on_face = check_hand_on_face(hands_landmarks, face)
         hand_on_face = hand_on_face[1:] + [recent_hand_on_face]
-        # Maintain hand_on_face list size
-        if len(hand_on_face) > MAX_FRAMES:
-            hand_on_face = hand_on_face[-MAX_FRAMES:]
-            
         if recent_hand_on_face:
             tells['hand'] = new_tell("Hand covering face", ttl_for_tells)
-
         avg_gaze = get_avg_gaze(face)
         if detect_gaze_change(avg_gaze):
             tells['gaze'] = new_tell("Change in gaze", ttl_for_tells)
-
         if get_lip_ratio(face) < LIP_COMPRESSION_RATIO:
             tells['lips'] = new_tell("Lip compression", ttl_for_tells)
-
     return tells
 
 def get_bpm_change_value(image, draw, face_landmarks, hands_landmarks, fps):
-    global hr_values, hr_times
-    if not face_landmarks: return None
-    try:
+    global hr_values, hr_times, EPOCH, avg_bpms
+    
+    if face_landmarks:
         face = face_landmarks.landmark
-        cheekL = get_area(image, draw, face[449], face[350], face[429], face[280])
-        cheekR = get_area(image, draw, face[121], face[229], face[50], face[209])
-        val = np.average(cheekL[:,:,1:3]) + np.average(cheekR[:,:,1:3])
-        if np.isnan(val): return None
-        
-        hr_values.append(val)
-        hr_times.append(time.time() - EPOCH)
-        if len(hr_values) > MAX_HISTORY:
-            hr_values.pop(0)
-            hr_times.pop(0)
+        try:
+            cheekL = get_area(image, draw, topL=face[449], topR=face[350], bottomR=face[429], bottomL=face[280])
+            cheekR = get_area(image, draw, topL=face[121], topR=face[229], bottomR=face[50], bottomL=face[209])
             
-        return calculate_bpm(hr_values, fps or 30.0)
-    except: return None
+            # Kiểm tra kích thước vùng má có hợp lệ không
+            if cheekL.size > 0 and cheekR.size > 0:
+                cheekLwithoutBlue = np.average(cheekL[:, :, 1:3])
+                cheekRwithoutBlue = np.average(cheekR[:, :, 1:3])
+                
+                # Thêm giá trị vào hr_values
+                hr_value = cheekLwithoutBlue + cheekRwithoutBlue
+                hr_values.append(hr_value)
+                hr_times.append(time.time() - EPOCH)
+                
+                # Giới hạn độ dài để tránh tràn bộ nhớ
+                if len(hr_values) > MAX_HISTORY:
+                    hr_values = hr_values[-MAX_HISTORY:]
+                    hr_times = hr_times[-MAX_HISTORY:]
+                
+                # Cần ít nhất 60 frame (khoảng 2 giây) để tính BPM chính xác
+                if len(hr_values) >= 60:
+                    bpm = calculate_bpm(hr_values[-120:], fps)
+                    if bpm:
+                        # Cập nhật avg_bpms
+                        avg_bpms = avg_bpms[1:] + [bpm]
+                        return bpm
+        except Exception as e:
+            print(f"Error calculating BPM: {e}")
+    
+    return None

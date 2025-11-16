@@ -2,6 +2,7 @@ import pygame
 import cv2
 import mediapipe as mp
 import numpy as np
+import os
 from datetime import datetime
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -9,6 +10,8 @@ import threading
 import time
 import deception_detection as dd
 from utils import get_video_file
+import alert_system as alerts
+import review_mode
 
 # Global variables
 screen_width = 1200
@@ -104,8 +107,11 @@ def update_bpm_chart():
         return cv2.cvtColor(np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8).reshape(canvas.get_width_height()[::-1] + (4,)), cv2.COLOR_RGBA2BGR)
     except: return None
 
-def add_truth_meter(image, tell_count):
-    """Add truth meter overlay to image"""
+def add_truth_meter(image, tell_count, banner_height=0):
+    """
+    Add truth meter overlay to image
+    banner_height: height of top banner to position meter below it
+    """
     global meter
 
     if meter is None:
@@ -126,8 +132,8 @@ def add_truth_meter(image, tell_count):
     try:
         resized_meter = cv2.resize(meter, (meter_width, meter_height), interpolation=cv2.INTER_AREA)
 
-        # Position at top
-        y_pos = sm
+        # Position below banner with more offset
+        y_pos = banner_height + 40 if banner_height > 0 else sm
         x_pos = bg
 
         # Ensure we don't exceed image bounds
@@ -146,6 +152,40 @@ def add_truth_meter(image, tell_count):
     except Exception as e:
         print(f"Error adding truth meter: {e}")
     
+def get_stress_level(tells_count, bpm_change=0):
+    """
+    Calculate stress level based on number of tells and BPM change
+    Returns: (level_text, color, severity_int)
+    """
+    # Exclude BPM from tells count for severity calculation
+    actual_tells = max(0, tells_count - 1)
+    
+    # Calculate severity score (0-100)
+    severity_score = 0
+    
+    # Tells contribute 15 points each
+    severity_score += actual_tells * 15
+    
+    # BPM change contributes up to 30 points
+    if abs(bpm_change) > 20:
+        severity_score += 30
+    elif abs(bpm_change) > 15:
+        severity_score += 20
+    elif abs(bpm_change) > 10:
+        severity_score += 10
+    
+    # Cap at 100
+    severity_score = min(100, severity_score)
+    
+    # Determine level
+    if severity_score < 30:
+        return ("LOW STRESS", (0, 255, 0), 1)  # Green
+    elif severity_score < 60:
+        return ("MEDIUM STRESS", (0, 165, 255), 2)  # Orange
+    else:
+        return ("HIGH STRESS - ALERT", (0, 0, 255), 3)  # Red
+
+
 def draw_button(screen, rect, text, font, is_hovered=False):
     """Draw a button on Pygame surface"""
     color = COLOR_BUTTON_HOVER if is_hovered else COLOR_BUTTON
@@ -181,10 +221,19 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     if enable_chart:
         chart_setup()
 
+    # Initialize review session if recording
+    review_session = None
+    if enable_recording:
+        review_session = review_mode.ReviewSession()
+
     # Reset data khi bắt đầu phiên mới
     dd.hr_times = []
     dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
+    dd.mood = ''
+    dd.mood_history = []
+    dd.mood_frames_count = 0
+    dd.calculating_mood = False
     dd.EPOCH = time.time()
 
     mp_face_mesh = mp.solutions.face_mesh
@@ -203,12 +252,18 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         filename = f"interrogation_{timestamp}.avi"
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         recording = cv2.VideoWriter(filename, fourcc, 10, (1280, 720))
+        if review_session:
+            review_session.video_file = filename
+            review_session.fps = 10
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh, \
          mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
         
         calibrated = False
         frame_count = 0
+        calibration_start_time = time.time()
+        # CALIBRATION_TIME = 120  # 2 minutes in seconds
+        CALIBRATION_TIME = 20  # 20s in seconds
         while cap.isOpened():
             success, image = cap.read()
             if not success: continue
@@ -219,36 +274,163 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
 
             if draw_landmarks:
                 dd.draw_on_frame(image, face_landmarks, hands_landmarks)
-            dd.add_text(image, current_tells, calibrated)
-            add_truth_meter(image, len(current_tells))
+            
+            # Determine banner height to pass to add_text and add_truth_meter
+            banner_height = 0
 
             if not calibrated:
-                progress = min(100, int(frame_count / dd.MAX_FRAMES * 100))
-                cv2.putText(image, f"Calibrating... {progress}%", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+                # Calculate elapsed and remaining time
+                elapsed_time = time.time() - calibration_start_time
+                remaining_time = max(0, CALIBRATION_TIME - elapsed_time)
+                minutes = int(remaining_time // 60)
+                seconds = int(remaining_time % 60)
+                
+                # Draw banner AT TOP
+                overlay = image.copy()
+                banner_height = 100
+                banner_y_start = 0  # Start at very top
+                cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
+                
+                # Phase 1 title and timer on same line
+                phase_text = "PHASE 1: CALIBRATION"
+                cv2.putText(image, phase_text, 
+                           (10, banner_y_start + 35), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+                
+                # Timer display next to title
+                timer_text = f"TIME: {minutes:02d}:{seconds:02d}"
+                cv2.putText(image, timer_text, 
+                           (image.shape[1] - 280, banner_y_start + 35), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 3)
+                
+                # Instruction text on second line
+                cv2.putText(image, "Ask neutral questions only - Establishing baseline", 
+                           (10, banner_y_start + 75), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+                # Progress bar at bottom
+                progress = min(1.0, elapsed_time / CALIBRATION_TIME)
+                bar_width = int(image.shape[1] * 0.8)
+                bar_x = int(image.shape[1] * 0.1)
+                bar_y = image.shape[0] - 60
+                cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (50, 50, 50), -1)
+                cv2.rectangle(image, (bar_x, bar_y), (bar_x + int(bar_width * progress), bar_y + 30), (0, 255, 255), -1)
+                cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (255, 255, 255), 2)
+                
+                # Automatic transition when time is up
+                if remaining_time <= 0:
+                    calibrated = True
+                    if review_session:
+                        review_session.set_calibration_complete()
+                    print("\n" + "="*60)
+                    print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
+                    print("="*60 + "\n")
             else:
-                cv2.putText(image, "CALIBRATED", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                # Phase 2: INTERROGATION MODE
+                # Calculate stress level
+                bpm_change = 0
+                if len(dd.avg_bpms) > 1 and dd.avg_bpms[-1] > 0:
+                    bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
+                
+                stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                
+                # Phase 2 banner AT TOP with dynamic color based on stress
+                overlay = image.copy()
+                banner_height = 100
+                banner_y_start = 0
+                cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+                
+                # Title
+                cv2.putText(image, "PHASE 2: INTERROGATION MODE - ACTIVE", 
+                           (10, banner_y_start + 25), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
+                # Ready indicator
+                cv2.putText(image, "CALIBRATED - Ready for interrogation", 
+                           (10, banner_y_start + 50), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Stress level indicator with color coding
+                cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
+                           (10, banner_y_start + 80), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
+                
+                # Process tells through alert system (clustering + priority)
+                alert = alerts.process_indicators(current_tells, stress_level)
+                
+                # Track in review session
+                if review_session and calibrated:
+                    review_session.add_event(current_tells, stress_level, 
+                                            alert.confidence if alert else 0.0, frame_count)
+                    if alert:
+                        review_session.add_key_moment(alert.indicators, alert.confidence, 
+                                                     "alert_cluster")
+                
+                alert_x = image.shape[1] - 350
+                if alert:
+                    # High confidence alert: visual + audio cue
+                    text = alerts.overlay_text_for_alert(alert)
+                    cv2.putText(image, text,
+                               (alert_x, banner_y_start + 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                               (alert_x, banner_y_start + 60),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    try:
+                        alerts.play_alert_sound()
+                    except Exception:
+                        pass
+                else:
+                    # Lower-confidence visual hint (keep previous behavior)
+                    if len(current_tells) > 1:
+                        cv2.putText(image, "DEVIATION DETECTED!",
+                                   (alert_x, banner_y_start + 30),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                                   (alert_x, banner_y_start + 60),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+            
+            # Add truth meter and text BELOW banner
+            dd.add_text(image, current_tells, calibrated, banner_height)
+            add_truth_meter(image, len(current_tells), banner_height)
 
             if enable_chart and calibrated:
                 chart_img = update_bpm_chart()
                 if chart_img is not None:
                     h, w = chart_img.shape[:2]
-                    x_off = image.shape[1] - w - 10
-                    y_off = 10
-                    if x_off > 0 and y_off + h < image.shape[0]:
+                    x_off = image.shape[1] - w - 10 
+                    y_off = image.shape[0] - h - 110  # Moved up to avoid black bar in review mode
+                    if x_off > 0 and y_off > 0 and y_off + h < image.shape[0]:
                         image[y_off:y_off+h, x_off:x_off+w] = chart_img
 
-            if frame_count >= dd.MAX_FRAMES: calibrated = True
             cv2.imshow('Lie Detector - Webcam', image)
             if enable_recording and recording: recording.write(image)
             frame_count += 1
 
             key = cv2.waitKey(5) & 0xFF
             if key == 27: break
-            elif key == ord('c'): calibrated = not calibrated
+            elif key == ord('c'): 
+                # Manual calibration toggle
+                calibrated = not calibrated
+                if not calibrated:
+                    calibration_start_time = time.time()  # Reset timer
+            elif key == ord('b'):  # Bookmark key moment
+                if review_session and calibrated:
+                    review_session.add_manual_marker("Manual bookmark")
+                    print("⭐ Key moment bookmarked")
             if cv2.getWindowProperty('Lie Detector - Webcam', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
     if recording: recording.release()
+    
+    # Save review session
+    if review_session:
+        review_session.print_summary()
+        session_file = review_session.save()
+        print(f"\n💾 Review session saved: {session_file}")
+    
     cv2.destroyAllWindows()
     if fig: plt.close(fig); fig = None
 
@@ -258,10 +440,20 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     if enable_chart:
         chart_setup()
 
+    # Initialize review session if recording
+    review_session = None
+    if enable_recording:
+        review_session = review_mode.ReviewSession()
+        review_session.video_file = video_file
+
     # Reset data
     dd.hr_times = []
     dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
+    dd.mood = ''
+    dd.mood_history = []
+    dd.mood_frames_count = 0
+    dd.calculating_mood = False
     dd.EPOCH = time.time()
 
     mp_face_mesh = mp.solutions.face_mesh
@@ -270,60 +462,224 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+    
+    # Auto-adjust calibration time based on video duration
+    CALIBRATION_TIME = min(10, duration * 0.5)  # 50% of video duration, max 10s
+    
+    # Frame skipping for better performance
+    target_fps = 15  # Process at 15 FPS instead of original FPS
+    frame_skip = max(1, int(fps / target_fps))
+    effective_fps = fps / frame_skip
+    
+    print(f"Video Info: {fps} FPS, {w}x{h}, {total_frames} frames, Duration: {duration:.1f}s")
+    print(f"Calibration: {CALIBRATION_TIME:.1f}s, Processing: {effective_fps:.1f} FPS (skip every {frame_skip} frames)")
 
     if enable_recording:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"analyzed_{timestamp}.avi"
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        recording = cv2.VideoWriter(filename, fourcc, 10, (w, h))
+        recording = cv2.VideoWriter(filename, fourcc, effective_fps, (w, h))
+        if review_session:
+            review_session.fps = effective_fps
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh, \
          mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
 
         calibrated = False
         frame_count = 0
+        processed_count = 0
         paused = False
+        calibration_start_frame = 0
+        
         while cap.isOpened():
             if not paused:
                 success, image = cap.read()
-                if not success: break
+                if not success:
+                    print(f"\n{'='*60}")
+                    print(f"Video ended at frame {frame_count}/{total_frames}")
+                    print(f"Processed {processed_count} frames")
+                    print(f"Calibrated: {calibrated}")
+                    print(f"{'='*60}\n")
+                    break
+                
+                frame_count += 1
+                
+                # Skip frames for better performance
+                if frame_count % frame_skip != 0:
+                    continue
+                
+                processed_count += 1
                 
                 face_landmarks, hands_landmarks = dd.find_face_and_hands(image, face_mesh, hands)
-                current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, fps)
+                current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, effective_fps)
 
                 if draw_landmarks:
                     dd.draw_on_frame(image, face_landmarks, hands_landmarks)
-                dd.add_text(image, current_tells, calibrated)
-                add_truth_meter(image, len(current_tells))
+                
+                banner_height = 0
 
                 if not calibrated:
-                    progress = min(100, int(frame_count / dd.MAX_FRAMES * 100))
-                    cv2.putText(image, f"Calibrating... {progress}%", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+                    # Calculate elapsed and remaining time based on processed frames
+                    elapsed_time = (processed_count - calibration_start_frame) / effective_fps
+                    remaining_time = max(0, CALIBRATION_TIME - elapsed_time)
+                    minutes = int(remaining_time // 60)
+                    seconds = int(remaining_time % 60)
+                    
+                    # Draw banner AT TOP
+                    overlay = image.copy()
+                    banner_height = 100
+                    banner_y_start = 0  # Start at very top
+                    cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
+                    
+                    # Phase 1 title and timer on same line
+                    phase_text = "PHASE 1: CALIBRATION"
+                    cv2.putText(image, phase_text, 
+                               (10, banner_y_start + 35), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+                    
+                    # Timer display next to title
+                    timer_text = f"TIME: {minutes:02d}:{seconds:02d}"
+                    cv2.putText(image, timer_text, 
+                               (image.shape[1] - 280, banner_y_start + 35), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 3)
+                    
+                    # Instruction text on second line
+                    cv2.putText(image, "Ask neutral questions only - Establishing baseline", 
+                               (10, banner_y_start + 75), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    
+                    # Progress bar at bottom
+                    progress = min(1.0, elapsed_time / CALIBRATION_TIME)
+                    bar_width = int(image.shape[1] * 0.8)
+                    bar_x = int(image.shape[1] * 0.1)
+                    bar_y = image.shape[0] - 60
+                    cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (50, 50, 50), -1)
+                    cv2.rectangle(image, (bar_x, bar_y), (bar_x + int(bar_width * progress), bar_y + 30), (0, 255, 255), -1)
+                    cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (255, 255, 255), 2)
+                    
+                    # Automatic transition when time is up
+                    if remaining_time <= 0:
+                        calibrated = True
+                        if review_session:
+                            review_session.set_calibration_complete()
+                        print("\n" + "="*60)
+                        print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
+                        print("="*60 + "\n")
                 else:
-                    cv2.putText(image, "CALIBRATED", (10, image.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                    # Phase 2: INTERROGATION MODE
+                    # Calculate stress level
+                    bpm_change = 0
+                    if len(dd.avg_bpms) > 1 and dd.avg_bpms[-1] > 0:
+                        bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
+                    
+                    stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                    
+                    # Phase 2 banner AT TOP with dynamic color based on stress
+                    overlay = image.copy()
+                    banner_height = 100
+                    banner_y_start = 0
+                    cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+                    
+                    # Title
+                    cv2.putText(image, "PHASE 2: INTERROGATION MODE - ACTIVE", 
+                               (10, banner_y_start + 25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    
+                    # Ready indicator
+                    cv2.putText(image, "CALIBRATED - Ready for interrogation", 
+                               (10, banner_y_start + 50), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    # Stress level indicator with color coding
+                    cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
+                               (10, banner_y_start + 80), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
+                    
+                    # Process tells through alert system (clustering + priority)
+                    alert = alerts.process_indicators(current_tells, stress_level)
+                    
+                    # Track in review session
+                    if review_session:
+                        review_session.add_event(current_tells, stress_level,
+                                                alert.confidence if alert else 0.0, processed_count)
+                        if alert:
+                            review_session.add_key_moment(alert.indicators, alert.confidence,
+                                                         "alert_cluster")
+                    
+                    alert_x = image.shape[1] - 350
+                    if alert:
+                        text = alerts.overlay_text_for_alert(alert)
+                        cv2.putText(image, text,
+                                   (alert_x, banner_y_start + 30),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                                   (alert_x, banner_y_start + 60),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                        try:
+                            alerts.play_alert_sound()
+                        except Exception:
+                            pass
+                    else:
+                        if len(current_tells) > 1:
+                            cv2.putText(image, "DEVIATION DETECTED!",
+                                       (alert_x, banner_y_start + 30),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                            cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                                       (alert_x, banner_y_start + 60),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                
+                # Add truth meter and text BELOW banner
+                dd.add_text(image, current_tells, calibrated, banner_height)
+                add_truth_meter(image, len(current_tells), banner_height)
 
                 if enable_chart and calibrated:
                     chart_img = update_bpm_chart()
                     if chart_img is not None:
                         ch, cw = chart_img.shape[:2]
                         x_off = image.shape[1] - cw - 10
-                        y_off = 10
-                        if x_off > 0 and y_off + ch < image.shape[0]:
+                        y_off = image.shape[0] - ch - 110  # Moved up to avoid black bar in review mode
+                        if x_off > 0 and y_off > 0 and y_off + ch < image.shape[0]:
                             image[y_off:y_off+ch, x_off:x_off+cw] = chart_img
 
-                if frame_count >= dd.MAX_FRAMES: calibrated = True
-                frame_count += 1
+                # Progress indicator
+                progress_text = f"Frame: {frame_count}/{total_frames} | Processing: {processed_count} | Phase: {'CALIBRATION' if not calibrated else 'INTERROGATION'}"
+                cv2.putText(image, progress_text, 
+                           (10, image.shape[0] - 10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             cv2.imshow('Lie Detector - Video Analysis', image)
-            if enable_recording and recording and not paused: recording.write(image)
+            if enable_recording and recording and not paused: 
+                recording.write(image)
 
-            key = cv2.waitKey(int(1000/fps)) & 0xFF
+            # Simplified timing
+            key = cv2.waitKey(1) & 0xFF
+                
             if key == 27: break
-            elif key == ord(' '): paused = not paused
+            elif key == ord(' '): 
+                paused = not paused
+            elif key == ord('c'):
+                calibrated = not calibrated
+                if not calibrated:
+                    calibration_start_frame = processed_count
+            elif key == ord('b'):  # Bookmark
+                if review_session and calibrated:
+                    review_session.add_manual_marker("Manual bookmark")
+                    print("⭐ Key moment bookmarked")
             if cv2.getWindowProperty('Lie Detector - Video Analysis', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
     if recording: recording.release()
+    
+    # Save review session
+    if review_session:
+        review_session.print_summary()
+        session_file = review_session.save()
+        print(f"\n💾 Review session saved: {session_file}")
+    
     cv2.destroyAllWindows()
     if fig: plt.close(fig); fig = None
 
@@ -357,12 +713,13 @@ def main_menu():
     # Cập nhật lại vị trí các nút
     webcam_button = pygame.Rect(button_start_x, start_y, button_width, button_height)
     video_button = pygame.Rect(button_start_x, start_y + button_height + button_spacing, button_width, button_height)
+    review_button = pygame.Rect(button_start_x, start_y + 2 * (button_height + button_spacing), button_width, button_height)
     
     # Căn giữa nhóm checkbox (ước lượng chiều rộng khoảng 300px để cân đối)
     checkbox_group_width = 300
     checkbox_start_x = center_x - checkbox_group_width // 2
     
-    checkbox_y = start_y + 2 * (button_height + button_spacing)
+    checkbox_y = start_y + 3 * (button_height + button_spacing)
     landmarks_checkbox = pygame.Rect(checkbox_start_x, checkbox_y, checkbox_size, checkbox_size)
     record_checkbox = pygame.Rect(checkbox_start_x, checkbox_y + 40, checkbox_size, checkbox_size)
     chart_checkbox = pygame.Rect(checkbox_start_x, checkbox_y + 80, checkbox_size, checkbox_size)
@@ -386,34 +743,72 @@ def main_menu():
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if webcam_button.collidepoint(event.pos):
-                    pygame.quit() # Close pygame window entirely before opening opencv
+                    pygame.quit()
                     try:
                         play_webcam(draw_landmarks, enable_recording, enable_chart)
                     except Exception as e:
+                        import traceback
                         print(f"Webcam error: {e}")
-                    time.sleep(0.5)    
-                    pygame.init() 
-                    screen = pygame.display.set_mode((screen_width, screen_height))
-                    pygame.display.set_caption('Lie Detector Pro v5.1')
-                    font, title_font, subtitle_font = init_fonts()
-                    
-                    pygame.event.clear()
+                        traceback.print_exc()
+                    return
                     
                 elif video_button.collidepoint(event.pos):
+                    # Minimize pygame window to avoid blocking file dialog
+                    pygame.display.iconify()
+                    pygame.event.pump()  # Process events
+                    
                     video_file = get_video_file()
+                    
                     if video_file:
-                        pygame.quit() # Close pygame window
+                        pygame.quit()
                         try:
                             play_video(video_file, draw_landmarks, enable_recording, enable_chart)
                         except Exception as e:
+                            import traceback
                             print(f"Video error: {e}")
-                        time.sleep(0.5)
-                        
-                        pygame.init() # Re-init pygame
-                        screen = pygame.display.set_mode((screen_width, screen_height))
-                        pygame.display.set_caption('Lie Detector Pro v5.1')
-                        font, title_font, subtitle_font = init_fonts()
-                        pygame.event.clear()
+                            traceback.print_exc()
+                        return
+                    else:
+                        # If no file selected, restore window
+                        pygame.display.flip()
+                
+                elif review_button.collidepoint(event.pos):
+                    # Load and review a saved session
+                    pygame.display.iconify()
+                    pygame.event.pump()
+                    
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes('-topmost', True)
+                    
+                    session_file = filedialog.askopenfilename(
+                        title="Select Review Session",
+                        filetypes=[
+                            ("JSON files", "*.json"),
+                            ("All files", "*.*")
+                        ]
+                    )
+                    root.destroy()
+                    
+                    if session_file:
+                        # Load session and get video file
+                        session = review_mode.ReviewSession.load(session_file)
+                        if session.video_file and os.path.exists(session.video_file):
+                            pygame.quit()
+                            try:
+                                review_mode.play_review(session.video_file, session_file)
+                            except Exception as e:
+                                import traceback
+                                print(f"Review error: {e}")
+                                traceback.print_exc()
+                            return
+                        else:
+                            print("Video file not found!")
+                            pygame.display.flip()
+                    else:
+                        pygame.display.flip()
                         
                 elif landmarks_checkbox.collidepoint(event.pos):
                     draw_landmarks = not draw_landmarks
@@ -441,6 +836,7 @@ def main_menu():
             # Buttons
             draw_button(screen, webcam_button, 'Webcam', font, webcam_button.collidepoint(mouse_pos))
             draw_button(screen, video_button, 'Video File', font, video_button.collidepoint(mouse_pos))
+            draw_button(screen, review_button, 'Review Mode', font, review_button.collidepoint(mouse_pos))
 
             # Checkboxes
             draw_checkbox(screen, landmarks_checkbox, draw_landmarks, font, 'Draw Landmarks')
