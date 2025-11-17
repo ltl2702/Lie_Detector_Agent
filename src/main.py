@@ -163,39 +163,81 @@ def add_truth_meter(image, tell_count, banner_height=0):
     except Exception as e:
         print(f"Error adding truth meter: {e}")
     
+# def get_stress_level(tells_count, bpm_change=0):
+#     """
+#     Calculate stress level based on number of tells and BPM change
+#     Returns: (level_text, color, severity_int)
+#     """
+#     # Exclude BPM from tells count for severity calculation
+#     actual_tells = max(0, tells_count - 1)
+    
+#     # Calculate severity score (0-100)
+#     severity_score = 0
+    
+#     # Tells contribute 15 points each
+#     severity_score += actual_tells * 15
+    
+#     # BPM change contributes up to 30 points
+#     if abs(bpm_change) > 20:
+#         severity_score += 30
+#     elif abs(bpm_change) > 15:
+#         severity_score += 20
+#     elif abs(bpm_change) > 10:
+#         severity_score += 10
+    
+#     # Cap at 100
+#     severity_score = min(100, severity_score)
+    
+#     # Determine level
+#     if severity_score < 30:
+#         text, color, level = ("LOW STRESS", (0, 255, 0), 1) # Green
+#     elif severity_score < 60:
+#         text, color, level = ("MEDIUM STRESS", (0, 165, 255), 2) # Orange
+#     else:
+#         text, color, level = ("HIGH STRESS - ALERT", (0, 0, 255), 3) # Red
+
+#     return (text, color, level, severity_score)
+
 def get_stress_level(tells_count, bpm_change=0):
     """
-    Calculate stress level based on number of tells and BPM change
-    Returns: (level_text, color, severity_int)
+    Calculate stress level based on number of tells and BPM change (REVISED LOGIC)
+    Returns: (level_text, color, severity_int, severity_score)
     """
-    # Exclude BPM from tells count for severity calculation
-    actual_tells = max(0, tells_count - 1)
+    
+    # SỬA LỖI: Không trừ 1 nữa. tells_count bây giờ là len(alert_tells) chính xác.
+    actual_tells = tells_count
     
     # Calculate severity score (0-100)
-    severity_score = 0
     
-    # Tells contribute 15 points each
-    severity_score += actual_tells * 15
+    # 1. Tính điểm hành vi (Behavioral Tells) - Tối đa 50 điểm
+    # Mỗi tell 10 điểm, tối đa 5 tells
+    tell_score = min(50, actual_tells * 10)
     
-    # BPM change contributes up to 30 points
-    if abs(bpm_change) > 20:
-        severity_score += 30
-    elif abs(bpm_change) > 15:
-        severity_score += 20
-    elif abs(bpm_change) > 10:
-        severity_score += 10
+    # 2. Tính điểm sinh lý (Physiological - BPM) - Tối đa 50 điểm
+    # Chúng ta quan tâm chủ yếu đến BPM TĂNG VỌT (dấu hiệu stress)
+    bpm_score = 0
+    if bpm_change > 20:
+        bpm_score = 50  # Tăng > 20 BPM (Rất nghiêm trọng)
+    elif bpm_change > 15:
+        bpm_score = 35  # Tăng > 15 BPM
+    elif bpm_change > 10:
+        bpm_score = 20  # Tăng > 10 BPM
+    elif bpm_change > 5:
+        bpm_score = 10  # Tăng nhẹ > 5 BPM
+    elif bpm_change < -10:
+        bpm_score = 10  # Giảm đột ngột (dấu hiệu dồn nén/tập trung cao độ)
+        
+    # Tổng điểm = Hành vi + Sinh lý
+    severity_score = min(100, tell_score + bpm_score)
     
-    # Cap at 100
-    severity_score = min(100, severity_score)
-    
-    # Determine level
+    # 3. Determine level (Giữ nguyên ngưỡng)
     if severity_score < 30:
-        text, color, level = ("LOW STRESS", (0, 255, 0), 1) # Green
+        text, color, level = ("LOW STRESS", (0, 255, 0), 1)  # Green
     elif severity_score < 60:
-        text, color, level = ("MEDIUM STRESS", (0, 165, 255), 2) # Orange
+        text, color, level = ("MEDIUM STRESS", (0, 165, 255), 2)  # Orange
     else:
-        text, color, level = ("HIGH STRESS - ALERT", (0, 0, 255), 3) # Red
-
+        text, color, level = ("HIGH STRESS - ALERT", (0, 0, 255), 3)  # Red
+        
     return (text, color, level, severity_score)
 
 
@@ -283,7 +325,8 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
             image = cv2.flip(image, 1)
 
             face_landmarks, hands_landmarks = dd.find_face_and_hands(image, face_mesh, hands)
-            current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, fps)
+            # current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, fps)
+            display_tells, alert_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, fps)
 
             if draw_landmarks:
                 dd.draw_on_frame(image, face_landmarks, hands_landmarks)
@@ -347,7 +390,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                     bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
                 
                 # stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
-                stress_text, stress_color, stress_level, stress_score = get_stress_level(len(current_tells), bpm_change)
+                stress_text, stress_color, stress_level, stress_score = get_stress_level(len(alert_tells), bpm_change)
                 
                 # Phase 2 banner AT TOP with dynamic color based on stress
                 overlay = image.copy()
@@ -413,7 +456,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
             
                 # 1. Process indicators để lấy một alert *mới* (nếu có)
                 ts = time.time() 
-                new_alert = alerts.process_indicators(current_tells, stress_level, timestamp=ts)
+                new_alert = alerts.process_indicators(alert_tells, stress_level, timestamp=ts)
                 
                 # 2. Kiểm tra xem alert mới có vừa xuất hiện không
                 if new_alert:
@@ -422,7 +465,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                     
                     # Thêm sự kiện "thật" này vào review session
                     if review_session and calibrated:
-                        review_session.add_event(current_tells, stress_level, 
+                        review_session.add_event(alert_tells, stress_level, 
                                                 new_alert.confidence, frame_count)
                         review_session.add_key_moment(new_alert.indicators, new_alert.confidence, 
                                                      "alert_cluster")
@@ -440,7 +483,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
 
                 # 4. Ghi lại review session cho các frame *không* có alert mới
                 if not new_alert and review_session and calibrated:
-                     review_session.add_event(current_tells, stress_level, 
+                     review_session.add_event(alert_tells, stress_level, 
                                              0.0, frame_count) # Ghi lại với confidence = 0
                 
                 # --- END STABILIZATION LOGIC ---
@@ -463,7 +506,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                                (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2)
                     
-                    cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                    cv2.putText(image, f"Active Tells: {len(active_alert_to_draw.indicators)}",
                                (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                     
@@ -475,19 +518,21 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                             pass
                 else:
                     # Lower-confidence visual hint (nếu không có alert nào đang active)
-                    if len(current_tells) > 1:
+                    if len(alert_tells) > 1:
                         cv2.putText(image, "DEVIATION DETECTED!",
                                    (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                        cv2.putText(image, f"Active Tells: {len(active_alert_to_draw.indicators)}",
                                    (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                 
                 # --- END DRAWING LOGIC ---
             
             # Add truth meter and text BELOW banner
-            dd.add_text(image, current_tells, calibrated, banner_height)
-            add_truth_meter(image, len(current_tells), banner_height)
+            # dd.add_text(image, current_tells, calibrated, banner_height)
+            # add_truth_meter(image, len(current_tells), banner_height)
+            dd.add_text(image, display_tells, calibrated, banner_height)
+            add_truth_meter(image, len(display_tells), banner_height)
 
             if enable_chart and calibrated:
                 chart_img = update_bpm_chart()
@@ -606,7 +651,8 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                 processed_count += 1
                 
                 face_landmarks, hands_landmarks = dd.find_face_and_hands(image, face_mesh, hands)
-                current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, effective_fps)
+                # current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, effective_fps)
+                display_tells, alert_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, fps)
 
                 if draw_landmarks:
                     dd.draw_on_frame(image, face_landmarks, hands_landmarks)
@@ -669,7 +715,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                         bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
                     
                     # stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
-                    stress_text, stress_color, stress_level, stress_score = get_stress_level(len(current_tells), bpm_change)
+                    stress_text, stress_color, stress_level, stress_score = get_stress_level(len(alert_tells), bpm_change)
                     
                     # Phase 2 banner AT TOP with dynamic color based on stress
                     overlay = image.copy()
@@ -734,7 +780,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
             
                 # 1. Process indicators để lấy một alert *mới* (nếu có)
                 ts = time.time() 
-                new_alert = alerts.process_indicators(current_tells, stress_level, timestamp=ts)
+                new_alert = alerts.process_indicators(alert_tells, stress_level, timestamp=ts)
                 
                 # 2. Kiểm tra xem alert mới có vừa xuất hiện không
                 if new_alert:
@@ -743,7 +789,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     
                     # Thêm sự kiện "thật" này vào review session
                     if review_session and calibrated:
-                        review_session.add_event(current_tells, stress_level, 
+                        review_session.add_event(alert_tells, stress_level, 
                                                 new_alert.confidence, frame_count)
                         review_session.add_key_moment(new_alert.indicators, new_alert.confidence, 
                                                      "alert_cluster")
@@ -761,7 +807,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
 
                 # 4. Ghi lại review session cho các frame *không* có alert mới
                 if not new_alert and review_session and calibrated:
-                     review_session.add_event(current_tells, stress_level, 
+                     review_session.add_event(alert_tells, stress_level, 
                                              0.0, frame_count) # Ghi lại với confidence = 0
                 
                 # --- END STABILIZATION LOGIC ---
@@ -784,7 +830,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2)
                     
-                    cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                    cv2.putText(image, f"Active Tells: {len(active_alert_to_draw.indicators)}",
                                (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                     
@@ -796,19 +842,21 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                             pass
                 else:
                     # Lower-confidence visual hint (nếu không có alert nào đang active)
-                    if len(current_tells) > 1:
+                    if len(alert_tells) > 1:
                         cv2.putText(image, "DEVIATION DETECTED!",
                                    (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                        cv2.putText(image, f"Active Tells: {len(active_alert_to_draw.indicators)}",
                                    (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                 
                 # --- END DRAWING LOGIC ---
                 
                 # Add truth meter and text BELOW banner
-                dd.add_text(image, current_tells, calibrated, banner_height)
-                add_truth_meter(image, len(current_tells), banner_height)
+                # dd.add_text(image, current_tells, calibrated, banner_height)
+                # add_truth_meter(image, len(current_tells), banner_height)
+                dd.add_text(image, display_tells, calibrated, banner_height)
+                add_truth_meter(image, len(display_tells), banner_height)
 
                 if enable_chart and calibrated:
                     chart_img = update_bpm_chart()

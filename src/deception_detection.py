@@ -313,6 +313,9 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
     global tells, calculating_mood, mood_frames_count
     global blinks, hand_on_face, face_area_size
     tells = decrement_tells(tells)
+
+    # Dictionary chỉ dành cho hệ thống cảnh báo
+    alert_tells = {}
     if face_landmarks:
         face = face_landmarks.landmark
         face_area_size = get_face_relative_area(face)
@@ -342,23 +345,40 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
         tells['avg_bpms'] = new_tell(bpm_display, ttl_for_tells)
         if bpm:
             bpm_delta = bpm - avg_bpms[-1]
+
             if abs(bpm_delta) > SIGNIFICANT_BPM_CHANGE:
                 change_desc = "Heart rate increasing" if bpm_delta > 0 else "Heart rate decreasing"
-                tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
+                tell_obj = new_tell(change_desc, ttl_for_tells)
+                
+                tells['bpm_change'] = tell_obj         # Hiển thị
+                alert_tells['bpm_change'] = tell_obj   # Cảnh báo
+
         blinks = blinks[1:] + [is_blinking(face)]
         recent_blink_tell = get_blink_tell(blinks)
+
         if recent_blink_tell:
-            tells['blinking'] = new_tell(recent_blink_tell, ttl_for_tells)
+            tell_obj = new_tell(recent_blink_tell, ttl_for_tells)
+            tells['blinking'] = tell_obj       # Hiển thị
+            alert_tells['blinking'] = tell_obj # Cảnh báo
+
         recent_hand_on_face = check_hand_on_face(hands_landmarks, face)
         hand_on_face = hand_on_face[1:] + [recent_hand_on_face]
+
         if recent_hand_on_face:
-            tells['hand'] = new_tell("Hand covering face", ttl_for_tells)
+            tell_obj = new_tell("Hand covering face", ttl_for_tells)
+            tells['hand'] = tell_obj       # Hiển thị
+            alert_tells['hand'] = tell_obj # Cảnh báo
+
         avg_gaze = get_avg_gaze(face)
         if detect_gaze_change(avg_gaze):
-            tells['gaze'] = new_tell("Change in gaze", ttl_for_tells)
+            tell_obj = new_tell("Change in gaze", ttl_for_tells)
+            tells['gaze'] = tell_obj       # Hiển thị
+            alert_tells['gaze'] = tell_obj # Cảnh báo
         if get_lip_ratio(face) < LIP_COMPRESSION_RATIO:
-            tells['lips'] = new_tell("Lip compression", ttl_for_tells)
-    return tells
+            tell_obj = new_tell("Lip compression", ttl_for_tells)
+            tells['lips'] = tell_obj       # Hiển thị
+            alert_tells['lips'] = tell_obj # Cảnh báo
+    return tells, alert_tells
 
 def get_bpm_change_value(image, draw, face_landmarks, hands_landmarks, fps):
     global hr_values, hr_times, EPOCH, avg_bpms

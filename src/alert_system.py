@@ -49,7 +49,8 @@ class AlertManager:
         # Confidence logic
         self.CONFIDENCE_BASE = 0.2
         self.CONFIDENCE_PER_INDICATOR = 0.25
-        self.ALERT_CONFIDENCE_THRESHOLD = 0.6
+        # self.ALERT_CONFIDENCE_THRESHOLD = 0.6
+        self.ALERT_CONFIDENCE_THRESHOLD = 0.45
 
         # False-positive filtering
         self.last_alert_time = 0
@@ -148,7 +149,8 @@ class AlertManager:
         alert = Alert(
             priority=score,
             timestamp=ts,
-            indicators=cluster,
+            # indicators=cluster,
+            indicators=list(set(cluster)),
             confidence=confidence,
             details={
                 'raw': indicators,
