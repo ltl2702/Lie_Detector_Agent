@@ -11,7 +11,7 @@ import mediapipe as mp
 MAX_FRAMES = 120
 RECENT_FRAMES = int(MAX_FRAMES / 10)
 EYE_BLINK_HEIGHT = .15
-SIGNIFICANT_BPM_CHANGE = 8
+SIGNIFICANT_BPM_CHANGE = 10  # Increased threshold to reduce false positives
 LIP_COMPRESSION_RATIO = .35
 TEXT_HEIGHT = 30
 FACEMESH_FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10]
@@ -33,6 +33,18 @@ mood_history = []  # Lưu lịch sử mood để làm mượt
 mood_frames_count = 0  # Đếm số frame để giảm tần suất phát hiện
 tells = dict()
 
+# Baseline storage for calibration
+baseline = {
+    'bpm': 0,
+    'blink_rate': 0,
+    'gaze_stability': 0,
+    'lip_ratio': 0,
+    'emotion': 'neutral',
+    'hand_face_frequency': 0,
+    'calibrated': False,
+    'samples_count': 0
+}
+
 def decrement_tells(tells):
     for key, tell in tells.copy().items():
         if 'ttl' in tell:
@@ -40,6 +52,111 @@ def decrement_tells(tells):
             if tell['ttl'] <= 0:
                 del tells[key]
     return tells
+
+def reset_baseline():
+    """Reset baseline to default values for new session"""
+    global baseline
+    baseline = {
+        'bpm': 0,
+        'blink_rate': 0,
+        'gaze_stability': 0,
+        'lip_ratio': 0,
+        'emotion': 'neutral',
+        'hand_face_frequency': 0,
+        'calibrated': False,
+        'samples_count': 0
+    }
+
+def calculate_baseline():
+    """Calculate baseline values from collected calibration data"""
+    global baseline, avg_bpms, blinks, gaze_values, mood_history, hand_on_face
+    
+    try:
+        # Calculate BPM baseline - use avg_bpms which contains processed BPM values
+        valid_bpms = [bpm for bpm in avg_bpms if bpm > 0 and 50 <= bpm <= 150]
+        if len(valid_bpms) >= 10:  # Need at least 10 valid BPM readings
+            baseline['bpm'] = sum(valid_bpms) / len(valid_bpms)
+            print(f"   🔍 BPM Calculation: {len(valid_bpms)} valid samples, range: {min(valid_bpms):.1f}-{max(valid_bpms):.1f}")
+        else:
+            print(f"   ⚠️  Insufficient BPM data: only {len(valid_bpms)} valid samples from {len(avg_bpms)} total")
+            # Try alternative calculation from hr_values if available
+            if len(hr_values) >= 60:
+                try:
+                    # Calculate BPM from recent hr_values
+                    recent_hr = hr_values[-60:]  # Last 60 samples
+                    calculated_bpm = calculate_bpm(recent_hr, 30)  # Assume 30 FPS
+                    if calculated_bpm and 50 <= calculated_bpm <= 150:
+                        baseline['bpm'] = calculated_bpm
+                        print(f"    Using calculated BPM from hr_values: {calculated_bpm:.1f}")
+                except Exception as e:
+                    print(f"    BPM calculation failed: {e}")
+        
+        # Calculate blink rate baseline (blinks per minute)
+        total_blinks = sum(blinks)
+        baseline['blink_rate'] = (total_blinks / MAX_FRAMES) * 60 * 30  # Estimate for 1 minute
+        
+        # Calculate gaze stability baseline
+        valid_gazes = [g for g in gaze_values if g != 0]
+        if valid_gazes:
+            baseline['gaze_stability'] = np.std(valid_gazes)  # Lower std = more stable
+        
+        # Set dominant emotion as baseline
+        if mood_history:
+            from collections import Counter
+            emotion_counts = Counter(mood_history)
+            baseline['emotion'] = emotion_counts.most_common(1)[0][0]
+        
+        # Calculate hand-on-face frequency
+        baseline['hand_face_frequency'] = sum(hand_on_face) / MAX_FRAMES
+        
+        baseline['calibrated'] = True
+        baseline['samples_count'] = MAX_FRAMES
+        
+        print(f"\n🎯 BASELINE ESTABLISHED:")
+        print(f"   💓 Average BPM: {baseline['bpm']:.1f}")
+        print(f"   👁️  Blink Rate: {baseline['blink_rate']:.1f}/min")
+        print(f"   👀 Gaze Stability: {baseline['gaze_stability']:.3f}")
+        print(f"   😊 Dominant Emotion: {baseline['emotion']}")
+        print(f"   🤚 Hand-Face Contact: {baseline['hand_face_frequency']:.2%}")
+        print(f"   📊 Total Samples: {baseline['samples_count']}")
+        
+        return True
+    except Exception as e:
+        print(f"Error calculating baseline: {e}")
+        return False
+
+def get_calibration_progress():
+    """Get calibration progress as percentage"""
+    # Check multiple data sources
+    bpm_samples = len([bpm for bpm in avg_bpms if bpm > 0 and 50 <= bpm <= 150])
+    blink_samples = len([b for b in blinks if b is not None])
+    mood_samples = len(mood_history)
+    
+    # Debug info
+    if len(avg_bpms) > 0:
+        valid_bpms = [bpm for bpm in avg_bpms if bpm > 0]
+        if len(valid_bpms) > 0:
+            print(f"BPM Progress: {bpm_samples} valid/{len(valid_bpms)} total, range: {min(valid_bpms):.1f}-{max(valid_bpms):.1f}")
+    
+    # Minimum requirements for each metric
+    min_bpm_samples = 30  # At least 30 BPM readings
+    min_blink_samples = MAX_FRAMES // 2  # At least half the frames
+    min_mood_samples = 5  # At least 5 mood detections
+    
+    progress_bpm = min(100, (bpm_samples / min_bpm_samples) * 100) if min_bpm_samples > 0 else 0
+    progress_blinks = min(100, (blink_samples / min_blink_samples) * 100)
+    progress_mood = min(100, (mood_samples / min_mood_samples) * 100)
+    
+    # Overall progress is average of all metrics
+    overall_progress = (progress_bpm + progress_blinks + progress_mood) / 3
+    
+    return {
+        'overall': overall_progress,
+        'bpm': progress_bpm,
+        'blinks': progress_blinks,
+        'mood': progress_mood,
+        'ready': overall_progress >= 70 and bpm_samples >= 15  # Lower threshold but require min BPM samples
+    }
 
 def new_tell(result, ttl_for_tells):
     return {'text': result, 'ttl': ttl_for_tells}
@@ -130,7 +247,7 @@ def add_text(image, tells, calibrated, banner_height=0):
     text_y = start_y
     
     # Hiển thị mood ở góc phải hơn, sau banner và xuống dưới hơn
-    mood_x = int(.70 * image.shape[1])  # Dịch sang phải từ 65% lên 70%
+    mood_x = int(.75 * image.shape[1])  # Dịch sang phải từ 70% lên 75%
     mood_y = start_y + 10  # Thêm 10px xuống dưới
     
     if mood:
@@ -309,10 +426,24 @@ def find_face_and_hands(image_original, face_mesh, hands):
         face_landmarks = faces.multi_face_landmarks[0]
     return face_landmarks, hands_landmarks
 
-def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=None, ttl_for_tells=30):
-    global tells, calculating_mood, mood_frames_count
+def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=None, ttl_for_tells=20):
+    global tells, calculating_mood, mood_frames_count, baseline
     global blinks, hand_on_face, face_area_size
-    tells = decrement_tells(tells)
+    
+    # Add frame counter for detection throttling
+    if not hasattr(process_frame, "frame_counter"):
+        process_frame.frame_counter = 0
+    process_frame.frame_counter += 1
+    
+    # During calibration, only collect data - don't generate detection tells
+    is_calibrating = not calibrated or not baseline['calibrated']
+    
+    # Only decrement existing tells, don't create new ones during calibration
+    if not is_calibrating:
+        tells = decrement_tells(tells)
+    else:
+        # During calibration, clear all tells except BPM display
+        tells = {'avg_bpms': tells.get('avg_bpms', {'text': 'BPM: Initializing...', 'ttl': ttl_for_tells})}
     if face_landmarks:
         face = face_landmarks.landmark
         face_area_size = get_face_relative_area(face)
@@ -330,35 +461,98 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
         bpm = get_bpm_change_value(image, False, face_landmarks, hands_landmarks, fps)
         
         # Hiển thị số mẫu đã thu thập khi chưa đủ dữ liệu
-        if bpm:
-            bpm_display = f"BPM: {bpm:.1f}"
-        else:
+        if is_calibrating:
+            # During calibration - show collection progress
             samples_collected = len(hr_values)
-            if samples_collected < 60:
-                bpm_display = f"BPM: Collecting... ({samples_collected}/60)"
+            bpm_samples = len([bpm for bpm in avg_bpms if bpm > 0])
+            if bpm and bpm_samples >= 5:
+                bpm_display = f"BPM: {bpm:.1f} (Calibrating: {bpm_samples}/30)"
             else:
-                bpm_display = "BPM: Calculating..."
+                bpm_display = f"BPM: Collecting... ({samples_collected}/60)"
+        else:
+            # After calibration - show current vs baseline with percentage change
+            if bpm and baseline['bpm'] > 0:
+                baseline_bpm = baseline['bpm']
+                deviation = abs(bpm - baseline_bpm)
+                percentage_change = ((bpm - baseline_bpm) / baseline_bpm) * 100
+                if deviation > SIGNIFICANT_BPM_CHANGE:
+                    bpm_display = f"BPM: {bpm:.1f} ({percentage_change:+.0f}% from baseline)"
+                else:
+                    bpm_display = f"BPM: {bpm:.1f} (Normal)"
+            else:
+                bpm_display = f"BPM: {bpm:.1f}" if bpm else "BPM: Calculating..."
         
+        # Always show BPM info
         tells['avg_bpms'] = new_tell(bpm_display, ttl_for_tells)
-        if bpm:
-            bpm_delta = bpm - avg_bpms[-1]
-            if abs(bpm_delta) > SIGNIFICANT_BPM_CHANGE:
-                change_desc = "Heart rate increasing" if bpm_delta > 0 else "Heart rate decreasing"
-                tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
+        
+        # Only generate detection tells after calibration is complete + frame throttling
+        if not is_calibrating and bpm and baseline['bpm'] > 0 and process_frame.frame_counter % 30 == 0:  # Every 30th frame (1 second)
+            baseline_bpm = baseline['bpm']
+            bpm_delta = abs(bpm - baseline_bpm)
+            # Very strict conditions for BPM change detection - only major changes
+            if bpm_delta > SIGNIFICANT_BPM_CHANGE and bpm_delta > baseline_bpm * 0.25:  # 25% change minimum
+                # Add cooldown - only report BPM changes every 60 frames (2 seconds)
+                if 'bpm_change' not in tells:  # Only create if no existing BPM change tell
+                    change_desc = f"Major heart rate {'increase' if bpm > baseline_bpm else 'decrease'} (+{bpm_delta:.1f} BPM)"
+                    tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
+        # Always collect blink data
         blinks = blinks[1:] + [is_blinking(face)]
-        recent_blink_tell = get_blink_tell(blinks)
-        if recent_blink_tell:
-            tells['blinking'] = new_tell(recent_blink_tell, ttl_for_tells)
+        
+        # Only generate blink tells after calibration with baseline comparison + throttling
+        if not is_calibrating and baseline['calibrated'] and process_frame.frame_counter % 60 == 0:  # Every 60th frame (2 seconds)
+            recent_blink_tell = get_blink_tell(blinks)
+            if recent_blink_tell:
+                # Only report if significantly different from baseline + cooldown
+                current_blink_rate = sum(blinks[-30:]) / 30 * 60 * 30  # Last 30 frames to blinks/min
+                baseline_blink_rate = baseline['blink_rate']
+                if (abs(current_blink_rate - baseline_blink_rate) > baseline_blink_rate * 0.4 and  # 40% change
+                    'blinking' not in tells):  # Only if no existing blink tell
+                    tells['blinking'] = new_tell(f"{recent_blink_tell} (vs baseline: {baseline_blink_rate:.1f}/min)", ttl_for_tells)
+        # Always collect hand data
         recent_hand_on_face = check_hand_on_face(hands_landmarks, face)
         hand_on_face = hand_on_face[1:] + [recent_hand_on_face]
-        if recent_hand_on_face:
-            tells['hand'] = new_tell("Hand covering face", ttl_for_tells)
+        
+        # Only generate hand tells after calibration and if frequency exceeds baseline + throttling
+        if not is_calibrating and recent_hand_on_face and baseline['calibrated'] and process_frame.frame_counter % 90 == 0:  # Every 90th frame (3 seconds)
+            current_frequency = sum(hand_on_face[-10:]) / 10  # Last 10 frames
+            if (current_frequency > baseline['hand_face_frequency'] * 3 and  # 3x baseline (stricter)
+                'hand' not in tells):  # Only if no existing hand tell
+                tells['hand'] = new_tell("Frequent hand-face contact", ttl_for_tells)
+        # Always collect gaze data
         avg_gaze = get_avg_gaze(face)
-        if detect_gaze_change(avg_gaze):
-            tells['gaze'] = new_tell("Change in gaze", ttl_for_tells)
-        if get_lip_ratio(face) < LIP_COMPRESSION_RATIO:
-            tells['lips'] = new_tell("Lip compression", ttl_for_tells)
-    return tells
+        gaze_change = detect_gaze_change(avg_gaze)
+        
+        # Always collect lip data
+        lip_ratio = get_lip_ratio(face)
+        
+        # Only generate tells after calibration with stricter conditions + throttling
+        if not is_calibrating and process_frame.frame_counter % 15 == 0:  # Every 15th frame (0.5 seconds) for gaze/lips
+            # Report gaze changes
+            if gaze_change and gaze_change > 0.08:  # Restored original threshold
+                tells['gaze'] = new_tell(f"Gaze shift ({gaze_change:.2f})", ttl_for_tells)
+            # Lip compression detection
+            if lip_ratio < LIP_COMPRESSION_RATIO:  # Restored original threshold
+                tells['lips'] = new_tell(f"Lip compression (ratio: {lip_ratio:.3f})", ttl_for_tells)
+    
+    # During calibration, return only BPM info
+    if is_calibrating:
+        return {'avg_bpms': tells.get('avg_bpms', new_tell('BPM: Initializing...', ttl_for_tells))}
+    else:
+        # Aggressive tell filtering - keep only essential tells
+        filtered_tells = {}
+        
+        # Always keep BPM display
+        if 'avg_bpms' in tells:
+            filtered_tells['avg_bpms'] = tells['avg_bpms']
+            
+        # Include all detection tells (restored original behavior)
+        detection_tells = ['bpm_change', 'blinking', 'hand', 'gaze', 'lips']
+        
+        for tell_type in detection_tells:
+            if tell_type in tells:
+                filtered_tells[tell_type] = tells[tell_type]
+                
+        return filtered_tells
 
 def get_bpm_change_value(image, draw, face_landmarks, hands_landmarks, fps):
     global hr_values, hr_times, EPOCH, avg_bpms

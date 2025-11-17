@@ -132,9 +132,9 @@ def add_truth_meter(image, tell_count, banner_height=0):
     try:
         resized_meter = cv2.resize(meter, (meter_width, meter_height), interpolation=cv2.INTER_AREA)
 
-        # Position below banner with more offset
-        y_pos = banner_height + 40 if banner_height > 0 else sm
-        x_pos = bg
+        # Position below banner with adjusted offset - moved up and right
+        y_pos = banner_height + 40 if banner_height > 0 else max(sm - 15, 5)  # Lui lên 20px
+        x_pos = bg + 100  # Dịch sang phải 50px
 
         # Ensure we don't exceed image bounds
         if y_pos + meter_height <= height and x_pos + meter_width <= width:
@@ -227,6 +227,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         review_session = review_mode.ReviewSession()
 
     # Reset data khi bắt đầu phiên mới
+    dd.reset_baseline()
     dd.hr_times = []
     dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
@@ -266,8 +267,9 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         calibrated = False
         frame_count = 0
         calibration_start_time = time.time()
-        # CALIBRATION_TIME = 120  # 2 minutes in seconds
-        CALIBRATION_TIME = 20  # 20s in seconds
+        session_start_time = time.time()  # Track total session time for alerts
+        CALIBRATION_TIME = 120  # 2 minutes in seconds
+        # CALIBRATION_TIME = 20  # 20s for testing
         while cap.isOpened():
             success, image = cap.read()
             if not success: continue
@@ -296,17 +298,18 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
                 cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
                 
-                # Phase 1 title and timer on same line
+                # Phase 1 title with proper spacing
                 phase_text = "PHASE 1: CALIBRATION"
                 cv2.putText(image, phase_text, 
                            (10, banner_y_start + 35), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
                 
-                # Timer display next to title
+                # Timer display with better positioning
                 timer_text = f"TIME: {minutes:02d}:{seconds:02d}"
+                timer_x = max(350, image.shape[1] - 200)  # Ensure minimum distance from title
                 cv2.putText(image, timer_text, 
-                           (image.shape[1] - 280, banner_y_start + 35), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 3)
+                           (timer_x, banner_y_start + 35), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
                 
                 # Instruction text on second line
                 cv2.putText(image, "Ask neutral questions only - Establishing baseline", 
@@ -322,14 +325,28 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 cv2.rectangle(image, (bar_x, bar_y), (bar_x + int(bar_width * progress), bar_y + 30), (0, 255, 255), -1)
                 cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (255, 255, 255), 2)
                 
-                # Automatic transition when time is up
+                # Check both time and data sufficiency for calibration completion
+                progress_info = dd.get_calibration_progress()
+                
+                # Show detailed progress on screen
+                progress_text = f"Data Collection: {progress_info['overall']:.0f}% | BPM: {progress_info['bpm']:.0f}% | Blinks: {progress_info['blinks']:.0f}% | Mood: {progress_info['mood']:.0f}%"
+                cv2.putText(image, progress_text, 
+                           (10, image.shape[0] - 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Automatic transition ONLY when time is up (strict 120 seconds)
                 if remaining_time <= 0:
-                    calibrated = True
-                    if review_session:
-                        review_session.set_calibration_complete()
-                    print("\n" + "="*60)
-                    print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
-                    print("="*60 + "\n")
+                    # Calculate baseline before transitioning
+                    if dd.calculate_baseline():
+                        calibrated = True
+                        if review_session:
+                            review_session.set_calibration_complete(dd.baseline['bpm'])
+                        print("\n" + "="*60)
+                        print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
+                        print("="*60 + "\n")
+                    else:
+                        print("⚠️  Baseline calculation failed, extending calibration...")
+                        calibration_start_time = time.time()  # Reset timer
             else:
                 # Phase 2: INTERROGATION MODE
                 # Calculate stress level
@@ -351,8 +368,9 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            (10, banner_y_start + 25), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                 
-                # Ready indicator
-                cv2.putText(image, "CALIBRATED - Ready for interrogation", 
+                # Ready indicator with baseline info
+                baseline_info = f"CALIBRATED - Ready for interrogation | Baseline BPM: {dd.baseline['bpm']:.0f}"
+                cv2.putText(image, baseline_info, 
                            (10, banner_y_start + 50), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
@@ -361,8 +379,12 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            (10, banner_y_start + 80), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                 
-                # Process tells through alert system (clustering + priority)
-                alert = alerts.process_indicators(current_tells, stress_level)
+                # Calculate elapsed time for accurate timestamps
+                elapsed_time = time.time() - session_start_time
+                
+                # Separate BPM display from detection tells for alert processing
+                detection_tells = {k: v for k, v in current_tells.items() if k != 'avg_bpms'}
+                alert = alerts.process_indicators(detection_tells, stress_level, elapsed_time)
                 
                 # Track in review session
                 if review_session and calibrated:
@@ -415,11 +437,11 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
 
             key = cv2.waitKey(5) & 0xFF
             if key == 27: break
-            elif key == ord('c'): 
-                # Manual calibration toggle
-                calibrated = not calibrated
-                if not calibrated:
-                    calibration_start_time = time.time()  # Reset timer
+            # elif key == ord('c'):  # DISABLED: Manual calibration toggle
+            #     # Manual calibration toggle
+            #     calibrated = not calibrated
+            #     if not calibrated:
+            #         calibration_start_time = time.time()  # Reset timer
             elif key == ord('b'):  # Bookmark key moment
                 if review_session and calibrated:
                     review_session.add_manual_marker("Manual bookmark")
@@ -454,6 +476,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
         review_session.video_file = video_file
 
     # Reset data
+    dd.reset_baseline()
     dd.hr_times = []
     dd.hr_values = []
     dd.avg_bpms = [0] * dd.MAX_FRAMES
@@ -473,7 +496,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     duration = total_frames / fps
     
     # Auto-adjust calibration time based on video duration
-    CALIBRATION_TIME = min(10, duration * 0.5)  # 50% of video duration, max 10s
+    CALIBRATION_TIME = min(60, max(20, duration * 0.3))  # 30% of video duration, min 20s, max 60s
     
     # Frame skipping for better performance
     target_fps = 15  # Process at 15 FPS instead of original FPS
@@ -545,17 +568,18 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     cv2.rectangle(overlay, (0, banner_y_start), (image.shape[1], banner_y_start + banner_height), (0, 0, 0), -1)
                     cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
                     
-                    # Phase 1 title and timer on same line
+                    # Phase 1 title with proper spacing
                     phase_text = "PHASE 1: CALIBRATION"
                     cv2.putText(image, phase_text, 
                                (10, banner_y_start + 35), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
                     
-                    # Timer display next to title
+                    # Timer display with better positioning
                     timer_text = f"TIME: {minutes:02d}:{seconds:02d}"
+                    timer_x = max(350, image.shape[1] - 200)  # Ensure minimum distance from title
                     cv2.putText(image, timer_text, 
-                               (image.shape[1] - 280, banner_y_start + 35), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 3)
+                               (timer_x, banner_y_start + 35), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
                     
                     # Instruction text on second line
                     cv2.putText(image, "Ask neutral questions only - Establishing baseline", 
@@ -571,14 +595,28 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     cv2.rectangle(image, (bar_x, bar_y), (bar_x + int(bar_width * progress), bar_y + 30), (0, 255, 255), -1)
                     cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (255, 255, 255), 2)
                     
-                    # Automatic transition when time is up
+                    # Check both time and data sufficiency for calibration completion  
+                    progress_info = dd.get_calibration_progress()
+                    
+                    # Show detailed progress on screen
+                    progress_text = f"Data Collection: {progress_info['overall']:.0f}% | BPM: {progress_info['bpm']:.0f}% | Blinks: {progress_info['blinks']:.0f}% | Mood: {progress_info['mood']:.0f}%"
+                    cv2.putText(image, progress_text, 
+                               (10, image.shape[0] - 90), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    
+                    # Automatic transition ONLY when time is up (no early completion)
                     if remaining_time <= 0:
-                        calibrated = True
-                        if review_session:
-                            review_session.set_calibration_complete()
-                        print("\n" + "="*60)
-                        print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
-                        print("="*60 + "\n")
+                        # Calculate baseline before transitioning
+                        if dd.calculate_baseline():
+                            calibrated = True
+                            if review_session:
+                                review_session.set_calibration_complete(dd.baseline['bpm'])
+                            print("\n" + "="*60)
+                            print("CALIBRATION COMPLETE - TRANSITIONING TO INTERROGATION MODE")
+                            print("="*60 + "\n")
+                        else:
+                            print("⚠️  Baseline calculation failed, extending calibration...")
+                            calibration_start_frame = processed_count  # Reset timer
                 else:
                     # Phase 2: INTERROGATION MODE
                     # Calculate stress level
@@ -600,8 +638,9 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                (10, banner_y_start + 25), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                     
-                    # Ready indicator
-                    cv2.putText(image, "CALIBRATED - Ready for interrogation", 
+                    # Ready indicator with baseline info
+                    baseline_info = f"CALIBRATED - Ready for interrogation | Baseline BPM: {dd.baseline['bpm']:.0f}"
+                    cv2.putText(image, baseline_info, 
                                (10, banner_y_start + 50), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                     
@@ -610,8 +649,12 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                (10, banner_y_start + 80), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                     
-                    # Process tells through alert system (clustering + priority)
-                    alert = alerts.process_indicators(current_tells, stress_level)
+                    # Calculate elapsed time for accurate timestamps
+                    elapsed_time = frame_count / effective_fps
+                    
+                    # Separate BPM display from detection tells for alert processing
+                    detection_tells = {k: v for k, v in current_tells.items() if k != 'avg_bpms'}
+                    alert = alerts.process_indicators(detection_tells, stress_level, elapsed_time)
                     
                     # Track in review session
                     if review_session:
@@ -672,10 +715,10 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
             if key == 27: break
             elif key == ord(' '): 
                 paused = not paused
-            elif key == ord('c'):
-                calibrated = not calibrated
-                if not calibrated:
-                    calibration_start_frame = processed_count
+            # elif key == ord('c'):  # DISABLED: Manual calibration toggle  
+            #     calibrated = not calibrated
+            #     if not calibrated:
+            #         calibration_start_frame = processed_count
             elif key == ord('b'):  # Bookmark
                 if review_session and calibrated:
                     review_session.add_manual_marker("Manual bookmark")

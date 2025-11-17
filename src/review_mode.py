@@ -95,14 +95,16 @@ class ReviewSession:
         self.stress_levels: List[int] = []
         self.bpm_values: List[float] = []
         self.timestamps: List[float] = []
+        self.baseline_bpm: float = 0.0
         
         # Metadata
         self.video_file = None
         self.fps = 30.0
         
-    def set_calibration_complete(self):
+    def set_calibration_complete(self, baseline_bpm: float = 0.0):
         """Mark when calibration phase ended"""
         self.calibration_end_time = time.time()
+        self.baseline_bpm = baseline_bpm
         
     def add_event(self, tells: Dict[str, Dict], stress_level: int, 
                   confidence: float = 0.0, frame_number: int = None):
@@ -112,14 +114,19 @@ class ReviewSession:
         
         for tell_type, tell_data in tells.items():
             if tell_type == 'avg_bpms':
-                # Extract BPM value
+                # Extract BPM value with improved parsing
                 try:
-                    bpm_str = tell_data['text'].split(':')[1].strip()
-                    if 'Collecting' not in bpm_str and 'Calculating' not in bpm_str:
-                        bpm = float(bpm_str)
-                        self.bpm_values.append(bpm)
-                except:
-                    pass
+                    bpm_text = tell_data['text']
+                    if 'BPM:' in bpm_text and 'Collecting' not in bpm_text and 'Calculating' not in bpm_text:
+                        # Extract number between "BPM:" and next space or "("
+                        import re
+                        bpm_match = re.search(r'BPM:\s*(\d+\.?\d*)', bpm_text)
+                        if bpm_match:
+                            bpm = float(bpm_match.group(1))
+                            if 50 <= bpm <= 200:  # Valid BPM range
+                                self.bpm_values.append(bpm)
+                except Exception as e:
+                    pass  # Skip invalid BPM values
             
             event = TellEvent(
                 timestamp=timestamp,
@@ -180,8 +187,8 @@ class ReviewSession:
             max_idx = max(range(len(self.stress_levels)), key=lambda i: self.stress_levels[i])
             max_stress_ts = self.timestamps[max_idx] if max_idx < len(self.timestamps) else 0
         
-        # BPM statistics
-        baseline_bpm = self.bpm_values[0] if self.bpm_values else 0
+        # BPM statistics  
+        baseline_bpm = self.baseline_bpm  # Use stored baseline from calibration
         avg_bpm = np.mean(self.bpm_values) if self.bpm_values else 0
         max_bpm = max(self.bpm_values) if self.bpm_values else 0
         min_bpm = min(self.bpm_values) if self.bpm_values else 0

@@ -40,7 +40,7 @@ class AlertManager:
             'blinking': 15,
             'lips': 15,
             'gaze': 10,
-            'avg_bpms': 5,
+            # avg_bpms removed - not a deception indicator, only for display
         }
         self.CONFIDENCE_BASE = 0.2
         self.CONFIDENCE_PER_INDICATOR = 0.25
