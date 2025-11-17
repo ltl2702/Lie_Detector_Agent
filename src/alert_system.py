@@ -1,6 +1,7 @@
 import time
 import heapq
 import platform
+from collections import deque
 
 try:
     import pygame
@@ -32,6 +33,8 @@ class AlertManager:
     def __init__(self):
         self._heap = []  # min-heap by priority (lower number = lower priority)
         self.recent = []  # recent raw events for clustering
+        self.history = deque(maxlen=200)
+
         self.CLUSTER_WINDOW = 3.0  # seconds to cluster nearby indicators
         self.LOOKBACK = 10.0  # keep recent events for this long
         self.WEIGHTS = {
@@ -42,9 +45,16 @@ class AlertManager:
             'gaze': 10,
             # avg_bpms removed - not a deception indicator, only for display
         }
+
+        # Confidence logic
         self.CONFIDENCE_BASE = 0.2
         self.CONFIDENCE_PER_INDICATOR = 0.25
         self.ALERT_CONFIDENCE_THRESHOLD = 0.6
+
+        # False-positive filtering
+        self.last_alert_time = 0
+        self.ALERT_COOLDOWN = 1.2
+        self.pattern_memory = deque(maxlen=15)
 
     def _now(self):
         return time.time()
@@ -58,6 +68,40 @@ class AlertManager:
             return None
         _, _, alert = heapq.heappop(self._heap)
         return alert
+    
+    def priority_to_level(self, p: int):
+        if p < 25:
+            return "LOW"
+        elif p < 50:
+            return "MEDIUM"
+        elif p < 75:
+            return "HIGH"
+        return "CRITICAL"
+    
+    
+    def compute_stress_score(self, indicators: List[str], stress_level: int):
+        score = sum(self.WEIGHTS.get(i, 5) for i in indicators)
+        score += stress_level * 10
+        return max(0, min(100, int(score)))
+
+    
+    def reduce_false_positive(self, indicators: List[str]):
+        now = self._now()
+        key = tuple(sorted(indicators))
+
+        # cooldown
+        if now - self.last_alert_time < self.ALERT_COOLDOWN:
+            return False
+
+        # require repeated patterns
+        self.pattern_memory.append((now, key))
+        repeated = sum(1 for t, k in self.pattern_memory if k == key and now - t < 3)
+
+        if repeated < 2 and len(indicators) < 2:
+            return False
+
+        self.last_alert_time = now
+        return True
 
     def process(self, indicators: Dict[str, Dict], stress_level: int = 0, timestamp: float = None):
         """Process a dict of indicator tells. Returns Alert when an alert should be raised, else None.
@@ -92,10 +136,26 @@ class AlertManager:
         # compute confidence
         confidence = min(1.0, self.CONFIDENCE_BASE + len(cluster) * self.CONFIDENCE_PER_INDICATOR)
 
-        priority = int(score)
+        # priority = int(score)
 
-        alert = Alert(priority=priority, timestamp=ts, indicators=list(set(cluster)), confidence=confidence,
-                      details={'raw': indicators})
+        # alert = Alert(priority=priority, timestamp=ts, indicators=list(set(cluster)), confidence=confidence,
+        #               details={'raw': indicators})
+
+        # Stress Score 
+        stress_score = self.compute_stress_score(cluster, stress_level)
+
+        # Build alert object
+        alert = Alert(
+            priority=score,
+            timestamp=ts,
+            indicators=cluster,
+            confidence=confidence,
+            details={
+                'raw': indicators,
+                'stress_score': stress_score,
+                'priority_level': self.priority_to_level(score)
+            }
+        )
 
         # enqueue for record keeping
         self.enqueue(alert)
