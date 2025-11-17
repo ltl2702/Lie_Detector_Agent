@@ -35,10 +35,17 @@ COLOR_EXIT_BUTTON_HOVER = (255, 0, 0)
 COLOR_CHECKBOX = (100, 100, 100)
 COLOR_CHECKBOX_CHECKED = (0, 200, 0)
 
+ALERT_COLORS = {
+    "LOW": (0, 255, 0),       # Green
+    "MEDIUM": (0, 255, 255),  # Yellow
+    "HIGH": (0, 165, 255),    # Orange
+    "CRITICAL": (0, 0, 255)   # Red
+}
+
 
 meter = None
 try:
-    meter = cv2.imread(r'D:\Lie_Detector_Agent\src\meter.png')
+    meter = cv2.imread(r'C:\Users\Thu Trang\Downloads\Lie_Detector_Agent\src\meter.png')
     if meter is None:
         meter = np.zeros((50, 400, 3), dtype=np.uint8)
         # Vẽ meter giả nếu không tìm thấy file
@@ -179,11 +186,13 @@ def get_stress_level(tells_count, bpm_change=0):
     
     # Determine level
     if severity_score < 30:
-        return ("LOW STRESS", (0, 255, 0), 1)  # Green
+        text, color, level = ("LOW STRESS", (0, 255, 0), 1) # Green
     elif severity_score < 60:
-        return ("MEDIUM STRESS", (0, 165, 255), 2)  # Orange
+        text, color, level = ("MEDIUM STRESS", (0, 165, 255), 2) # Orange
     else:
-        return ("HIGH STRESS - ALERT", (0, 0, 255), 3)  # Red
+        text, color, level = ("HIGH STRESS - ALERT", (0, 0, 255), 3) # Red
+
+    return (text, color, level, severity_score)
 
 
 def draw_button(screen, rect, text, font, is_hovered=False):
@@ -333,7 +342,8 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 if len(dd.avg_bpms) > 1 and dd.avg_bpms[-1] > 0:
                     bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
                 
-                stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                # stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                stress_text, stress_color, stress_level, stress_score = get_stress_level(len(current_tells), bpm_change)
                 
                 # Phase 2 banner AT TOP with dynamic color based on stress
                 overlay = image.copy()
@@ -353,7 +363,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
                 # Stress level indicator with color coding
-                cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
+                cv2.putText(image, f"STRESS LEVEL: {stress_text} ({stress_score}/100)", 
                            (10, banner_y_start + 80), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                 
@@ -370,14 +380,18 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 
                 alert_x = image.shape[1] - 350
                 if alert:
-                    # High confidence alert: visual + audio cue
+                    # Lấy cấp độ ưu tiên và màu sắc tương ứng
+                    priority_level = alert.details.get('priority_level', 'HIGH') # Mặc định là HIGH nếu không tìm thấy
+                    alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255)) # Mặc định là Đỏ
+
                     text = alerts.overlay_text_for_alert(alert)
                     cv2.putText(image, text,
-                               (alert_x, banner_y_start + 30),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                            (alert_x, banner_y_start + 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2) # <-- SỬ DỤNG MÀU ĐỘNG
+
                     cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                               (alert_x, banner_y_start + 60),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                            (alert_x, banner_y_start + 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                     try:
                         alerts.play_alert_sound()
                     except Exception:
@@ -575,7 +589,8 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     if len(dd.avg_bpms) > 1 and dd.avg_bpms[-1] > 0:
                         bpm_change = dd.avg_bpms[-1] - dd.avg_bpms[0]
                     
-                    stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                    # stress_text, stress_color, stress_level = get_stress_level(len(current_tells), bpm_change)
+                    stress_text, stress_color, stress_level, stress_score = get_stress_level(len(current_tells), bpm_change)
                     
                     # Phase 2 banner AT TOP with dynamic color based on stress
                     overlay = image.copy()
@@ -595,7 +610,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                     
                     # Stress level indicator with color coding
-                    cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
+                    cv2.putText(image, f"STRESS LEVEL: {stress_text} ({stress_score}/100)", 
                                (10, banner_y_start + 80), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                     
@@ -612,13 +627,18 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     
                     alert_x = image.shape[1] - 350
                     if alert:
+                        # Lấy cấp độ ưu tiên và màu sắc tương ứng
+                        priority_level = alert.details.get('priority_level', 'HIGH') # Mặc định là HIGH nếu không tìm thấy
+                        alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255)) # Mặc định là Đỏ
+
                         text = alerts.overlay_text_for_alert(alert)
                         cv2.putText(image, text,
-                                   (alert_x, banner_y_start + 30),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                                (alert_x, banner_y_start + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2) # <-- SỬ DỤNG MÀU ĐỘNG
+
                         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                   (alert_x, banner_y_start + 60),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                                (alert_x, banner_y_start + 60),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                         try:
                             alerts.play_alert_sound()
                         except Exception:
