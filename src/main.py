@@ -27,6 +27,7 @@ last_chart_update = 0
 CURRENT_ACTIVE_ALERT = None # Sẽ lưu (alert_object, timestamp)
 ALERT_LATCH_DURATION = 4.0 # Giữ alert trên màn hình trong 4 giây
 
+
 # Colors
 COLOR_BACKGROUND = (20, 20, 20)
 COLOR_BUTTON = (50, 50, 50)
@@ -228,7 +229,7 @@ def draw_checkbox(screen, rect, is_checked, font, label):
 
 
 def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False):
-    global recording, bpm_chart_enabled, fig
+    global recording, bpm_chart_enabled, fig, CURRENT_ACTIVE_ALERT
     bpm_chart_enabled = enable_chart
     if enable_chart:
         chart_setup()
@@ -366,7 +367,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
                 # Stress level indicator with color coding
-                cv2.putText(image, f"STRESS LEVEL: {stress_text} ({stress_score}/100)", 
+                cv2.putText(image, f"STRESS LEVEL: {stress_text} ({stress_score}%)", 
                            (10, banner_y_start + 80), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                 
@@ -448,7 +449,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 # --- START DRAWING LOGIC (Sử dụng 'active_alert_to_draw') ---
                 alert_x = image.shape[1] - 350
                 # Vị trí banner_y_start được định nghĩa ở trên (bằng 0), nhưng chúng ta muốn vẽ *dưới* banner
-                draw_y_pos = banner_height + 10 # Vị trí Y để bắt đầu vẽ alert (dưới banner)
+                # draw_y_pos = banner_height + 10 # Vị trí Y để bắt đầu vẽ alert (dưới banner)
 
                 
                 # 'active_alert_to_draw' thay thế cho 'alert' cũ
@@ -459,11 +460,11 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                     
                     text = alerts.overlay_text_for_alert(active_alert_to_draw)
                     cv2.putText(image, text,
-                               (alert_x, draw_y_pos), # Sử dụng draw_y_pos
+                               (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2)
                     
                     cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                               (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
+                               (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                     
                     # QUAN TRỌNG: Chỉ phát âm thanh KHI ALERT MỚI XUẤT HIỆN
@@ -476,10 +477,10 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                     # Lower-confidence visual hint (nếu không có alert nào đang active)
                     if len(current_tells) > 1:
                         cv2.putText(image, "DEVIATION DETECTED!",
-                                   (alert_x, draw_y_pos), # Sử dụng draw_y_pos
+                                   (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                   (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
+                                   (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                 
                 # --- END DRAWING LOGIC ---
@@ -527,7 +528,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     if fig: plt.close(fig); fig = None
 
 def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_chart=False):
-    global recording, bpm_chart_enabled, fig
+    global recording, bpm_chart_enabled, fig, CURRENT_ACTIVE_ALERT
     bpm_chart_enabled = enable_chart
     if enable_chart:
         chart_setup()
@@ -688,7 +689,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                     
                     # Stress level indicator with color coding
-                    cv2.putText(image, f"STRESS LEVEL: {stress_text} ({stress_score}/100)", 
+                    cv2.putText(image, f"STRESS LEVEL: {stress_text} ({stress_score}%)", 
                                (10, banner_y_start + 80), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                     
@@ -769,7 +770,7 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                 # --- START DRAWING LOGIC (Sử dụng 'active_alert_to_draw') ---
                 alert_x = image.shape[1] - 350
                 # Vị trí banner_y_start được định nghĩa ở trên (bằng 0), nhưng chúng ta muốn vẽ *dưới* banner
-                draw_y_pos = banner_height + 10 # Vị trí Y để bắt đầu vẽ alert (dưới banner)
+                # draw_y_pos = banner_height + 10 # Vị trí Y để bắt đầu vẽ alert (dưới banner)
 
                 
                 # 'active_alert_to_draw' thay thế cho 'alert' cũ
@@ -780,11 +781,11 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     
                     text = alerts.overlay_text_for_alert(active_alert_to_draw)
                     cv2.putText(image, text,
-                               (alert_x, draw_y_pos), # Sử dụng draw_y_pos
+                               (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2)
                     
                     cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                               (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
+                               (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                     
                     # QUAN TRỌNG: Chỉ phát âm thanh KHI ALERT MỚI XUẤT HIỆN
@@ -797,10 +798,10 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     # Lower-confidence visual hint (nếu không có alert nào đang active)
                     if len(current_tells) > 1:
                         cv2.putText(image, "DEVIATION DETECTED!",
-                                   (alert_x, draw_y_pos), # Sử dụng draw_y_pos
+                                   (alert_x, banner_y_start + 30), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                   (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
+                                   (alert_x, banner_y_start + 60), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                 
                 # --- END DRAWING LOGIC ---

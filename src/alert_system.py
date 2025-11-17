@@ -134,7 +134,7 @@ class AlertManager:
         score += stress_level * 10
 
         # compute confidence
-        confidence = min(1.0, self.CONFIDENCE_BASE + len(cluster) * self.CONFIDENCE_PER_INDICATOR)
+        confidence = min(1.0, self.CONFIDENCE_BASE + len(set(cluster)) * self.CONFIDENCE_PER_INDICATOR)
 
         # priority = int(score)
 
