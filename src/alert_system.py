@@ -10,6 +10,14 @@ except Exception:
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
+# Import memory system for adaptive thresholds
+try:
+    from memory_system import memory_system
+    MEMORY_SYSTEM_AVAILABLE = True
+except ImportError:
+    MEMORY_SYSTEM_AVAILABLE = False
+    print("⚠️ Memory system not available - using default thresholds")
+
 
 @dataclass(order=True)
 class Alert:
@@ -48,6 +56,21 @@ class AlertManager:
 
     def _now(self):
         return time.time()
+    
+    def _get_adaptive_confidence_threshold(self):
+        """Get adaptive confidence threshold from memory system"""
+        if MEMORY_SYSTEM_AVAILABLE:
+            # Start với threshold cao, hạ xuống khi Agent học được patterns
+            base_threshold = self.ALERT_CONFIDENCE_THRESHOLD
+            learning_summary = memory_system.threshold_manager.get_detection_summary()
+            
+            if learning_summary['learning_active'] and learning_summary['successful_detections'] > 0:
+                # Hạ threshold dần theo số lần detect thành công
+                reduction = min(0.15, learning_summary['successful_detections'] * 0.03)
+                adaptive_threshold = base_threshold - reduction
+                return max(0.45, adaptive_threshold)  # Không hạ xuống dưới 0.45
+            
+        return self.ALERT_CONFIDENCE_THRESHOLD
 
     def enqueue(self, alert: Alert):
         # use negative priority so heapq pops highest priority first
@@ -100,8 +123,18 @@ class AlertManager:
         # enqueue for record keeping
         self.enqueue(alert)
 
+        # Use adaptive threshold from memory system
+        adaptive_threshold = self._get_adaptive_confidence_threshold()
+        
         # If alert confidence is high enough, return it for immediate attention
-        if confidence >= self.ALERT_CONFIDENCE_THRESHOLD:
+        if confidence >= adaptive_threshold:
+            # Record detection trong memory system để học
+            if MEMORY_SYSTEM_AVAILABLE and confidence >= 0.6:  # Chỉ record high confidence detections
+                memory_system.record_detection_event(
+                    indicators=alert.indicators,
+                    confidence=confidence,
+                    timestamp=ts
+                )
             return alert
         return None
 

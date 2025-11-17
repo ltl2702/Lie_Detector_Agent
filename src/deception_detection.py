@@ -7,6 +7,14 @@ import threading
 import time
 import mediapipe as mp
 
+# Import memory system for adaptive learning
+try:
+    from memory_system import memory_system
+    MEMORY_SYSTEM_AVAILABLE = True
+except ImportError:
+    MEMORY_SYSTEM_AVAILABLE = False
+    print("Memory system not available - using static thresholds")
+
 # Constants and global variables
 MAX_FRAMES = 120
 RECENT_FRAMES = int(MAX_FRAMES / 10)
@@ -93,7 +101,9 @@ def calculate_baseline():
         
         # Calculate blink rate baseline (blinks per minute)
         total_blinks = sum(blinks)
-        baseline['blink_rate'] = (total_blinks / MAX_FRAMES) * 60 * 30  # Estimate for 1 minute
+        # Assume 30 FPS: 120 frames = 4 seconds, so blinks/minute = (blinks/4) * 60
+        seconds_recorded = MAX_FRAMES / 30.0  # 4 seconds
+        baseline['blink_rate'] = (total_blinks / seconds_recorded) * 60  # blinks per minute
         
         # Calculate gaze stability baseline
         valid_gazes = [g for g in gaze_values if g != 0]
@@ -119,6 +129,11 @@ def calculate_baseline():
         print(f"   😊 Dominant Emotion: {baseline['emotion']}")
         print(f"   🤚 Hand-Face Contact: {baseline['hand_face_frequency']:.2%}")
         print(f"   📊 Total Samples: {baseline['samples_count']}")
+        
+        # Update memory system with baseline metrics (session already started)
+        if MEMORY_SYSTEM_AVAILABLE and memory_system.current_session:
+            memory_system.current_session.baseline_metrics = baseline.copy()
+            print(f"🧠 MEMORY SYSTEM: Baseline metrics recorded for current session")
         
         return True
     except Exception as e:
@@ -489,8 +504,15 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
         if not is_calibrating and bpm and baseline['bpm'] > 0 and process_frame.frame_counter % 30 == 0:  # Every 30th frame (1 second)
             baseline_bpm = baseline['bpm']
             bpm_delta = abs(bpm - baseline_bpm)
-            # Very strict conditions for BPM change detection - only major changes
-            if bpm_delta > SIGNIFICANT_BPM_CHANGE and bpm_delta > baseline_bpm * 0.25:  # 25% change minimum
+            
+            # Get adaptive threshold from memory system
+            adaptive_threshold = SIGNIFICANT_BPM_CHANGE
+            if MEMORY_SYSTEM_AVAILABLE:
+                adaptive_threshold_pct = memory_system.get_adaptive_threshold('bpm_change') 
+                adaptive_threshold = baseline_bpm * (adaptive_threshold_pct / 100.0)
+            
+            # Use adaptive threshold instead of fixed threshold
+            if bpm_delta > adaptive_threshold:
                 # Add cooldown - only report BPM changes every 60 frames (2 seconds)
                 if 'bpm_change' not in tells:  # Only create if no existing BPM change tell
                     change_desc = f"Heart rate {'increase' if bpm > baseline_bpm else 'decrease'} (+{bpm_delta:.1f} BPM)"
@@ -502,10 +524,15 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
         if not is_calibrating and baseline['calibrated'] and process_frame.frame_counter % 60 == 0:  # Every 60th frame (2 seconds)
             recent_blink_tell = get_blink_tell(blinks)
             if recent_blink_tell:
+                # Get adaptive threshold from memory system
+                adaptive_threshold_pct = 0.4  # Default 40%
+                if MEMORY_SYSTEM_AVAILABLE:
+                    adaptive_threshold_pct = memory_system.get_adaptive_threshold('blink_rate') / 100.0
+                
                 # Only report if significantly different from baseline + cooldown
-                current_blink_rate = sum(blinks[-30:]) / 30 * 60 * 30  # Last 30 frames to blinks/min
+                current_blink_rate = (sum(blinks[-30:]) / (30 / 30.0)) * 60  # Last 30 frames (1 sec) to blinks/min
                 baseline_blink_rate = baseline['blink_rate']
-                if (abs(current_blink_rate - baseline_blink_rate) > baseline_blink_rate * 0.4 and  # 40% change
+                if (abs(current_blink_rate - baseline_blink_rate) > baseline_blink_rate * adaptive_threshold_pct and
                     'blinking' not in tells):  # Only if no existing blink tell
                     tells['blinking'] = new_tell(f"{recent_blink_tell} (vs baseline: {baseline_blink_rate:.1f}/min)", ttl_for_tells)
         # Always collect hand data
@@ -514,8 +541,14 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
         
         # Only generate hand tells after calibration and if frequency exceeds baseline + throttling
         if not is_calibrating and recent_hand_on_face and baseline['calibrated'] and process_frame.frame_counter % 90 == 0:  # Every 90th frame (3 seconds)
+            # Get adaptive threshold from memory system
+            adaptive_multiplier = 3.0  # Default 3x baseline
+            if MEMORY_SYSTEM_AVAILABLE:
+                adaptive_threshold_pct = memory_system.get_adaptive_threshold('hand_face_frequency')
+                adaptive_multiplier = adaptive_threshold_pct / 100.0
+            
             current_frequency = sum(hand_on_face[-10:]) / 10  # Last 10 frames
-            if (current_frequency > baseline['hand_face_frequency'] * 3 and  # 3x baseline (stricter)
+            if (current_frequency > baseline['hand_face_frequency'] * adaptive_multiplier and
                 'hand' not in tells):  # Only if no existing hand tell
                 tells['hand'] = new_tell("Frequent hand-face contact", ttl_for_tells)
         # Always collect gaze data

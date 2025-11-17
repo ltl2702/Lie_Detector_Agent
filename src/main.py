@@ -13,6 +13,13 @@ from utils import get_video_file
 import alert_system as alerts
 import review_mode
 
+# Import memory system for PHASE 5: MEMORY & LEARNING
+try:
+    from memory_system import memory_system
+    MEMORY_SYSTEM_AVAILABLE = True
+except ImportError:
+    MEMORY_SYSTEM_AVAILABLE = False
+
 # Global variables
 screen_width = 1200
 screen_height = 600
@@ -231,6 +238,14 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     if enable_recording:
         review_session = review_mode.ReviewSession()
 
+    # PHASE 5: Start new independent session
+    if MEMORY_SYSTEM_AVAILABLE:
+        try:
+            session_id = memory_system.start_new_session()
+            print(f"🧠 MEMORY SYSTEM: Started independent session {session_id}")
+        except Exception as e:
+            print(f"⚠️ Memory system error: {e}")
+
     # Reset data khi bắt đầu phiên mới
     dd.reset_baseline()
     dd.hr_times = []
@@ -258,13 +273,16 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         recordings_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'recordings')
         os.makedirs(recordings_dir, exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # PHASE 5: Timestamp-based file naming như yêu cầu
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
         filename = os.path.join(recordings_dir, f"interrogation_{timestamp}.avi")
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         recording = cv2.VideoWriter(filename, fourcc, 10, (1280, 720))
         if review_session:
             review_session.video_file = filename
             review_session.fps = 10
+            
+        print(f"🎬 PHASE 5 RECORDING: {filename}")
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh, \
          mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
@@ -378,6 +396,18 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            (10, banner_y_start + 80), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                 
+                # PHASE 5: Memory system learning info (top right corner)
+                if MEMORY_SYSTEM_AVAILABLE:
+                    try:
+                        learning_info = memory_system.get_learning_insights()
+                        if learning_info['learning_status'] == 'Active':
+                            learning_text = f"LEARNING: {learning_info['total_experience']} detections"
+                            cv2.putText(image, learning_text,
+                                       (image.shape[1] - 400, banner_y_start + 25),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                    except Exception as e:
+                        print(f"⚠️ Memory system error: {e}")
+                
                 # Calculate elapsed time for accurate timestamps
                 elapsed_time = time.time() - session_start_time
                 
@@ -395,26 +425,26 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 
                 alert_x = image.shape[1] - 350
                 if alert:
-                    # High confidence alert: visual + audio cue
+                    # High confidence alert: visual + audio cue - positioned below learning info
                     text = alerts.overlay_text_for_alert(alert)
                     cv2.putText(image, text,
-                               (alert_x, banner_y_start + 30),
+                               (alert_x, banner_y_start + 60),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                     cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                               (alert_x, banner_y_start + 60),
+                               (alert_x, banner_y_start + 90),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                     try:
                         alerts.play_alert_sound()
                     except Exception:
                         pass
                 else:
-                    # Lower-confidence visual hint (keep previous behavior)
+                    # Lower-confidence visual hint (keep previous behavior) - positioned below learning info
                     if len(current_tells) > 1:
                         cv2.putText(image, "DEVIATION DETECTED!",
-                                   (alert_x, banner_y_start + 30),
+                                   (alert_x, banner_y_start + 60),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                   (alert_x, banner_y_start + 60),
+                                   (alert_x, banner_y_start + 90),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
             
             # Add truth meter and text BELOW banner
@@ -444,6 +474,27 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     cap.release()
     if recording: recording.release()
     
+    # PHASE 5: Save memory session với learning data
+    if MEMORY_SYSTEM_AVAILABLE:
+        try:
+            memory_file = memory_system.save_session()
+            if memory_file:
+                learning_summary = memory_system.get_session_summary()
+                print(f"\n🧠 PHASE 5 MEMORY SAVED:")
+                print(f"   💾 File: {memory_file}")
+                print(f"   📊 Detections: {learning_summary['total_detections']}")
+                print(f"   🎯 Deceptions: {learning_summary['deception_count']}")
+                print(f"   🧮 Avg Confidence: {learning_summary['avg_confidence']:.1%}")
+                
+                # Print adaptive threshold changes
+                insights = memory_system.get_learning_insights()
+                if insights['sensitivity_improvements']:
+                    print(f"   📈 Sensitivity Improvements:")
+                    for indicator, improvement in insights['sensitivity_improvements'].items():
+                        print(f"      {indicator}: {improvement}")
+        except Exception as e:
+            print(f"⚠️ Error saving memory session: {e}")
+    
     # Save review session
     if review_session:
         review_session.print_summary()
@@ -452,8 +503,6 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         os.makedirs(sessions_dir, exist_ok=True)
         session_file = review_session.save(sessions_dir)
         print(f"\n💾 Review session saved: {session_file}")
-    
-
     
     cv2.destroyAllWindows()
     if fig: plt.close(fig); fig = None
@@ -469,6 +518,14 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     if enable_recording:
         review_session = review_mode.ReviewSession()
         review_session.video_file = video_file
+
+    # PHASE 5: Start new independent session for video analysis
+    if MEMORY_SYSTEM_AVAILABLE:
+        try:
+            session_id = memory_system.start_new_session()
+            print(f"🧠 MEMORY SYSTEM: Started independent video analysis session {session_id}")
+        except Exception as e:
+            print(f"⚠️ Memory system error: {e}")
 
     # Reset data
     dd.reset_baseline()
@@ -506,7 +563,8 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
         recordings_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'recordings')
         os.makedirs(recordings_dir, exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # PHASE 5: Timestamp-based naming for video analysis recording
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M") 
         filename = os.path.join(recordings_dir, f"analyzed_{timestamp}.avi")
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         recording = cv2.VideoWriter(filename, fourcc, effective_fps, (w, h))
@@ -648,6 +706,18 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                (10, banner_y_start + 80), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                     
+                    # PHASE 5: Memory system learning info for video analysis
+                    if MEMORY_SYSTEM_AVAILABLE:
+                        try:
+                            learning_info = memory_system.get_learning_insights()
+                            if learning_info['learning_status'] == 'Active':
+                                learning_text = f"LEARNING: {learning_info['total_experience']} detections"
+                                cv2.putText(image, learning_text,
+                                           (image.shape[1] - 400, banner_y_start + 25),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        except Exception as e:
+                            print(f"⚠️ Memory system error (video): {e}")
+                    
                     # Calculate elapsed time for accurate timestamps
                     elapsed_time = frame_count / effective_fps
                     
@@ -667,10 +737,10 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     if alert:
                         text = alerts.overlay_text_for_alert(alert)
                         cv2.putText(image, text,
-                                   (alert_x, banner_y_start + 30),
+                                   (alert_x, banner_y_start + 60),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                   (alert_x, banner_y_start + 60),
+                                   (alert_x, banner_y_start + 90),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                         try:
                             alerts.play_alert_sound()
@@ -679,10 +749,10 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     else:
                         if len(current_tells) > 1:
                             cv2.putText(image, "DEVIATION DETECTED!",
-                                       (alert_x, banner_y_start + 30),
+                                       (alert_x, banner_y_start + 60),
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                             cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                       (alert_x, banner_y_start + 60),
+                                       (alert_x, banner_y_start + 90),
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                 
                 # Add truth meter and text BELOW banner
@@ -730,6 +800,27 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
 
     cap.release()
     if recording: recording.release()
+    
+    # PHASE 5: Save memory session cho video analysis
+    if MEMORY_SYSTEM_AVAILABLE:
+        try:
+            memory_file = memory_system.save_session()
+            if memory_file:
+                learning_summary = memory_system.get_session_summary()
+                print(f"\n🧠 PHASE 5 MEMORY SAVED (Video Analysis):")
+                print(f"   💾 File: {memory_file}")
+                print(f"   📊 Detections: {learning_summary['total_detections']}")
+                print(f"   🎯 Deceptions: {learning_summary['deception_count']}")
+                print(f"   🧮 Avg Confidence: {learning_summary['avg_confidence']:.1%}")
+                
+                # Print insights
+                insights = memory_system.get_learning_insights()
+                if insights['behavioral_insights']:
+                    print(f"   🔍 Behavioral Insights:")
+                    for insight in insights['behavioral_insights']:
+                        print(f"      {insight}")
+        except Exception as e:
+            print(f"⚠️ Error saving memory session (video): {e}")
     
     # Save review session
     if review_session:
