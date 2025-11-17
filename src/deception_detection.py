@@ -247,7 +247,7 @@ def add_text(image, tells, calibrated, banner_height=0):
     text_y = start_y
     
     # Hiển thị mood ở góc phải hơn, sau banner và xuống dưới hơn
-    mood_x = int(.75 * image.shape[1])  # Dịch sang phải từ 70% lên 75%
+    mood_x = int(.80*image.shape[1])  # Dịch sang phải từ 70% lên 75%
     mood_y = start_y + 10  # Thêm 10px xuống dưới
     
     if mood:
@@ -476,7 +476,7 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
                 deviation = abs(bpm - baseline_bpm)
                 percentage_change = ((bpm - baseline_bpm) / baseline_bpm) * 100
                 if deviation > SIGNIFICANT_BPM_CHANGE:
-                    bpm_display = f"BPM: {bpm:.1f} ({percentage_change:+.0f}% from baseline)"
+                    bpm_display = f"BPM: {bpm:.1f} ({percentage_change:+.0f}%)"
                 else:
                     bpm_display = f"BPM: {bpm:.1f} (Normal)"
             else:
@@ -493,7 +493,7 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
             if bpm_delta > SIGNIFICANT_BPM_CHANGE and bpm_delta > baseline_bpm * 0.25:  # 25% change minimum
                 # Add cooldown - only report BPM changes every 60 frames (2 seconds)
                 if 'bpm_change' not in tells:  # Only create if no existing BPM change tell
-                    change_desc = f"Major heart rate {'increase' if bpm > baseline_bpm else 'decrease'} (+{bpm_delta:.1f} BPM)"
+                    change_desc = f"Heart rate {'increase' if bpm > baseline_bpm else 'decrease'} (+{bpm_delta:.1f} BPM)"
                     tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
         # Always collect blink data
         blinks = blinks[1:] + [is_blinking(face)]

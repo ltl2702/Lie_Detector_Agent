@@ -122,8 +122,8 @@ def add_truth_meter(image, tell_count, banner_height=0):
     sm = int(width / 64)  # scale multiplier
     bg = int(width / 3.2)  # background width
 
-    # Resize meter to fit
-    meter_height = min(sm, 30)
+    # Resize meter to fit - made taller
+    meter_height = min(sm, 50)  # Increased from 30 to 50
     meter_width = min(bg, 300)
     # Ensure meter_height and meter_width are at least 1
     meter_height = max(1, meter_height)
@@ -133,7 +133,7 @@ def add_truth_meter(image, tell_count, banner_height=0):
         resized_meter = cv2.resize(meter, (meter_width, meter_height), interpolation=cv2.INTER_AREA)
 
         # Position below banner with adjusted offset - moved up and right
-        y_pos = banner_height + 40 if banner_height > 0 else max(sm - 15, 5)  # Lui lên 20px
+        y_pos = banner_height + 30 if banner_height > 0 else max(sm - 15, 5) 
         x_pos = bg + 100  # Dịch sang phải 50px
 
         # Ensure we don't exceed image bounds
@@ -144,11 +144,16 @@ def add_truth_meter(image, tell_count, banner_height=0):
             if tell_count > 0:
                 # Position indicator (excludes BPM which is always shown)
                 actual_tells = max(0, tell_count - 1)
-                indicator_x = x_pos + min(int(meter_width * actual_tells / 6), meter_width - 10)
+                # More aggressive movement toward lie detection (divide by 3 instead of 6 for faster movement)
+                # Also add base offset to push it further right even with 1 tell
+                base_offset = meter_width * 0.3  # Start at 30% of meter width
+                tell_multiplier = meter_width * 0.5 / 3  # Remaining 70% divided by max 3 tells for faster movement
+                indicator_x = x_pos + int(base_offset + min(actual_tells * tell_multiplier, meter_width * 0.7))
+                indicator_x = min(indicator_x, x_pos + meter_width - 15)  # Don't go beyond meter
                 cv2.rectangle(image,
-                             (indicator_x, y_pos - 5),
-                             (indicator_x + 10, y_pos + meter_height + 5),
-                             (255, 255, 255), 2)
+                             (indicator_x, y_pos - 8),  # Extended height up
+                             (indicator_x + 12, y_pos + meter_height + 8),  # Extended height down and wider
+                             (255, 255, 255), 3)  # Thicker line
     except Exception as e:
         print(f"Error adding truth meter: {e}")
     
@@ -316,20 +321,12 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            (10, banner_y_start + 75), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                 
-                # Progress bar at bottom
-                progress = min(1.0, elapsed_time / CALIBRATION_TIME)
-                bar_width = int(image.shape[1] * 0.8)
-                bar_x = int(image.shape[1] * 0.1)
-                bar_y = image.shape[0] - 60
-                cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (50, 50, 50), -1)
-                cv2.rectangle(image, (bar_x, bar_y), (bar_x + int(bar_width * progress), bar_y + 30), (0, 255, 255), -1)
-                cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + 30), (255, 255, 255), 2)
+                # Calculate time-based progress percentage
+                time_progress = (elapsed_time / CALIBRATION_TIME) * 100
+                time_progress = min(100, time_progress)  # Cap at 100%
                 
-                # Check both time and data sufficiency for calibration completion
-                progress_info = dd.get_calibration_progress()
-                
-                # Show detailed progress on screen
-                progress_text = f"Data Collection: {progress_info['overall']:.0f}% | BPM: {progress_info['bpm']:.0f}% | Blinks: {progress_info['blinks']:.0f}% | Mood: {progress_info['mood']:.0f}%"
+                # Show time-based progress on screen
+                progress_text = f"Data Collection: {time_progress:.0f}%"
                 cv2.putText(image, progress_text, 
                            (10, image.shape[0] - 40), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -420,7 +417,9 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
             
             # Add truth meter and text BELOW banner
             dd.add_text(image, current_tells, calibrated, banner_height)
-            add_truth_meter(image, len(current_tells), banner_height)
+            # Only show truth meter after calibration is complete
+            if calibrated:
+                add_truth_meter(image, len(current_tells), banner_height)
 
             if enable_chart and calibrated:
                 chart_img = update_bpm_chart()
@@ -598,8 +597,12 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     # Check both time and data sufficiency for calibration completion  
                     progress_info = dd.get_calibration_progress()
                     
-                    # Show detailed progress on screen
-                    progress_text = f"Data Collection: {progress_info['overall']:.0f}% | BPM: {progress_info['bpm']:.0f}% | Blinks: {progress_info['blinks']:.0f}% | Mood: {progress_info['mood']:.0f}%"
+                    # Calculate time-based progress percentage
+                    time_progress = (elapsed_time / CALIBRATION_TIME) * 100
+                    time_progress = min(100, time_progress)  # Cap at 100%
+                    
+                    # Show time-based progress on screen
+                    progress_text = f"Data Collection: {time_progress:.0f}% | BPM: {progress_info['bpm']:.0f}% | Blinks: {progress_info['blinks']:.0f}% | Mood: {progress_info['mood']:.0f}%"
                     cv2.putText(image, progress_text, 
                                (10, image.shape[0] - 90), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -688,7 +691,9 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                 
                 # Add truth meter and text BELOW banner
                 dd.add_text(image, current_tells, calibrated, banner_height)
-                add_truth_meter(image, len(current_tells), banner_height)
+                # Only show truth meter after calibration is complete
+                if calibrated:
+                    add_truth_meter(image, len(current_tells), banner_height)
 
                 if enable_chart and calibrated:
                     chart_img = update_bpm_chart()
