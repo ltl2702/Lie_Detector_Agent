@@ -282,6 +282,8 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
 
             face_landmarks, hands_landmarks = dd.find_face_and_hands(image, face_mesh, hands)
             current_tells = dd.process_frame(image, face_landmarks, hands_landmarks, calibrated, fps)
+            
+
 
             if draw_landmarks:
                 dd.draw_on_frame(image, face_landmarks, hands_landmarks)
@@ -436,17 +438,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
 
             key = cv2.waitKey(5) & 0xFF
             if key == 27: break
-            # elif key == ord('c'):  # DISABLED: Manual calibration toggle
-            #     # Manual calibration toggle
-            #     calibrated = not calibrated
-            #     if not calibrated:
-            #         calibration_start_time = time.time()  # Reset timer
-            elif key == ord('b'):  # Bookmark key moment (only in interrogation phase)
-                if review_session and calibrated:
-                    review_session.add_manual_marker("Manual bookmark")
-                    print("⭐ Key moment bookmarked")
-                elif not calibrated:
-                    print("⚠️ Bookmarks only available during interrogation phase")
+
             if cv2.getWindowProperty('Lie Detector - Webcam', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
@@ -460,6 +452,8 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         os.makedirs(sessions_dir, exist_ok=True)
         session_file = review_session.save(sessions_dir)
         print(f"\n💾 Review session saved: {session_file}")
+    
+
     
     cv2.destroyAllWindows()
     if fig: plt.close(fig); fig = None
