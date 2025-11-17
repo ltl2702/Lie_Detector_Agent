@@ -346,7 +346,23 @@ def play_review(video_file: str, session_file: str = None):
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    current_frame = 0
+    # Start from Phase 2 (after calibration) if session data available
+    if session and session.calibration_end_time:
+        calibration_end = session.calibration_end_time - session.start_time
+        phase2_start_frame = int(calibration_end * fps)
+        current_frame = min(phase2_start_frame, total_frames - 1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+        
+        # Verify the position was set correctly
+        actual_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        print(f"📍 Starting from Phase 2 (Interrogation)")
+        print(f"   Calibration end: {calibration_end:.1f}s")
+        print(f"   Target frame: {phase2_start_frame}, Actual frame: {actual_frame}")
+        print(f"   FPS: {fps}")
+        current_frame = actual_frame  # Use actual frame position
+    else:
+        current_frame = 0
+    
     paused = True  # Start paused so user can see first frame
     playback_speed = 1.0
     need_frame_read = True
@@ -364,6 +380,34 @@ def play_review(video_file: str, session_file: str = None):
     print("="*60 + "\n")
     print("⏸️  Starting PAUSED - Press SPACE to play\n")
     
+    # Debug: Show key moment info
+    if session:
+        if session.calibration_end_time:
+            calibration_end = session.calibration_end_time - session.start_time
+            phase2_start_frame = int(calibration_end * fps)
+            
+            # Debug info
+            print(f"🔍 Debug Info:")
+            print(f"   Calibration end: {calibration_end:.1f}s")
+            print(f"   Phase 2 start frame: {phase2_start_frame}")
+            print(f"   FPS: {fps}")
+            
+            if session.key_moments:
+                first_moment = min(session.key_moments, key=lambda m: m.frame_number)
+                last_moment = max(session.key_moments, key=lambda m: m.frame_number)
+                print(f"   Key moment frame range: {first_moment.frame_number} - {last_moment.frame_number}")
+                print(f"   Key moment time range: {first_moment.timestamp:.1f}s - {last_moment.timestamp:.1f}s")
+            
+            # Filter by timestamp instead of frame number (more reliable)
+            phase2_moments = [m for m in session.key_moments if m.timestamp >= calibration_end]
+            print(f"🔍 Found {len(phase2_moments)} key moments in Phase 2 (out of {len(session.key_moments)} total)")
+            if phase2_moments:
+                print(f"   First moment at {str(timedelta(seconds=int(phase2_moments[0].timestamp)))} (frame {phase2_moments[0].frame_number})")
+                print(f"   Last moment at {str(timedelta(seconds=int(phase2_moments[-1].timestamp)))} (frame {phase2_moments[-1].frame_number})")
+        else:
+            print(f"🔍 Found {len(session.key_moments)} key moments total")
+        print(f"   Press 'M' to jump to key moments\n")
+    
     key_moment_idx = 0
     frame = None
     
@@ -380,12 +424,20 @@ def play_review(video_file: str, session_file: str = None):
         if not paused:
             current_frame += 1
             need_frame_read = True
+        
+        # Ensure current_frame stays in sync with video position
+        if need_frame_read:
+            actual_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+            if abs(actual_frame - current_frame) > 1:  # Resync if out of sync
+                current_frame = actual_frame
             
-            # Get tells for this frame
+            # Get tells for this frame - only from Phase 2 (after calibration)
             if session:
                 timestamp = current_frame / fps
+                # Only include events from Phase 2 (after calibration ended)
+                calibration_end = session.calibration_end_time - session.start_time if session.calibration_end_time else 0
                 frame_events = [e for e in session.events 
-                               if abs(e.timestamp - timestamp) < 0.1]
+                               if abs(e.timestamp - timestamp) < 0.1 and e.timestamp >= calibration_end]
                 
                 # Draw review mode banner at top
                 overlay = frame.copy()
@@ -409,14 +461,6 @@ def play_review(video_file: str, session_file: str = None):
                                    (frame.shape[1] - 150, 35),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
-                # Cover old UI elements from recorded video (bottom 80px only)
-                # Use solid black rectangle (no transparency)
-                cv2.rectangle(frame, (0, frame.shape[0] - 80), (frame.shape[1], frame.shape[0]), 
-                             (0, 0, 0), -1)
-                
-                # Draw timeline bar at bottom
-                draw_timeline(frame, current_frame, total_frames, session.key_moments, fps)
-                
                 # Draw tells overlay
                 y_offset = 30
                 for event in frame_events:
@@ -429,7 +473,7 @@ def play_review(video_file: str, session_file: str = None):
                 
                 # Check if this is a key moment
                 for moment in session.key_moments:
-                    if abs(moment.frame_number - current_frame) < 2:
+                    if abs(moment.frame_number - current_frame) < 3:  # Increased tolerance
                         # Highlight key moment with border at top
                         cv2.rectangle(frame, (0, 0), (frame.shape[1], 80), (0, 0, 255), 5)
                         # Show key moment text ABOVE timeline (not at bottom)
@@ -437,18 +481,59 @@ def play_review(video_file: str, session_file: str = None):
                         cv2.putText(frame, key_text,
                                    (frame.shape[1]//2 - 200, 50),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 3)
+                        # Also show tells involved
+                        if moment.tells:
+                            tells_text = f"Tells: {', '.join(moment.tells[:3])}"
+                            cv2.putText(frame, tells_text,
+                                       (frame.shape[1]//2 - 200, 75),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        
+        # Always draw timeline bar at bottom (even when paused) - Phase 2 only  
+        if session and session.calibration_end_time:
+            calibration_end = session.calibration_end_time - session.start_time
+            phase2_start_frame = int(calibration_end * fps)
+            draw_timeline_phase2(frame, current_frame, total_frames, session.key_moments, fps, phase2_start_frame)
             
-            # Show frame info above timeline (on black background)
+            # Show Phase 2 time only - convert frame back to session timestamp
+            video_current_time = current_frame / fps if fps > 0 else 0
+            # Session timestamp = video time
+            session_current_time = video_current_time
+            phase2_current_time = max(0, session_current_time - calibration_end)
+            
+            # Calculate total phase 2 duration from session data
+            video_total_time = total_frames / fps if fps > 0 else 0
+            phase2_total_time = max(0, video_total_time - calibration_end)
+            
+            time_str = str(timedelta(seconds=int(phase2_current_time)))
+            total_str = str(timedelta(seconds=int(phase2_total_time)))
+            
+            # Debug info 
+            if current_frame % 30 == 0:  # Print every 30 frames to avoid spam
+                print(f"Debug: frame={current_frame}, video_time={video_current_time:.1f}s, session_time={session_current_time:.1f}s, calib_end={calibration_end:.1f}s, phase2_time={phase2_current_time:.1f}s")
+            
+            info = f"Interrogation: {time_str}/{total_str} | Frame: {current_frame}/{total_frames} | Session: {str(timedelta(seconds=int(session_current_time)))} | Speed: {playback_speed}x"
+        elif session:
+            draw_timeline(frame, current_frame, total_frames, session.key_moments, fps)
             time_str = str(timedelta(seconds=int(current_frame / fps)))
             total_str = str(timedelta(seconds=int(total_frames / fps)))
             info = f"Frame: {current_frame}/{total_frames} | Time: {time_str}/{total_str} | Speed: {playback_speed}x"
-            # Position: bar is at h - 33, text at h - 52
-            cv2.putText(frame, info, (15, frame.shape[0] - 52),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            if paused:
-                cv2.putText(frame, "⏸️  PAUSED (SPACE to play)", (frame.shape[1]//2 - 150, 50),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+        else:
+            time_str = str(timedelta(seconds=int(current_frame / fps)))
+            total_str = str(timedelta(seconds=int(total_frames / fps)))
+            info = f"Frame: {current_frame}/{total_frames} | Time: {time_str}/{total_str} | Speed: {playback_speed}x"
+        
+        # Cover old UI elements from recorded video but preserve timeline area (bottom 40px only)  
+        # Timeline is at h-33 to h-11, so cover h-80 to h-45
+        cv2.rectangle(frame, (0, frame.shape[0] - 80), (frame.shape[1], frame.shape[0] - 45), 
+                     (0, 0, 0), -1)
+        
+        # Position: bar is at h - 33, text at h - 52 (now on black background)
+        cv2.putText(frame, info, (15, frame.shape[0] - 52),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        if paused:
+            cv2.putText(frame, " PAUSED (SPACE to play)", (frame.shape[1]//2 - 150, 50),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
         
         cv2.imshow('Review Mode', frame)
         
@@ -478,7 +563,12 @@ def play_review(video_file: str, session_file: str = None):
             print(f"⏩ Skipped forward to {str(timedelta(seconds=int(current_frame / fps)))}")
         elif key == 2424832 or key == 65361 or key_char == ord('a') or key_char == ord('A'):  # Left arrow or A
             skip_frames = int(5 * fps)
-            current_frame = max(0, current_frame - skip_frames)
+            if session and session.calibration_end_time:
+                calibration_end = session.calibration_end_time - session.start_time
+                phase2_start_frame = int(calibration_end * fps)
+                current_frame = max(phase2_start_frame, current_frame - skip_frames)  # Don't go before Phase 2
+            else:
+                current_frame = max(0, current_frame - skip_frames)
             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
             need_frame_read = True
             paused = True  # Auto-pause after seeking
@@ -490,34 +580,61 @@ def play_review(video_file: str, session_file: str = None):
             playback_speed = max(0.25, playback_speed / 2)
             print(f"🐢 Speed: {playback_speed}x")
         elif key_char == ord('m') or key_char == ord('M'):
-            # Jump to next key moment
-            if session and key_moment_idx < len(session.key_moments):
-                moment = session.key_moments[key_moment_idx]
-                current_frame = moment.frame_number
-                cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
-                need_frame_read = True
-                paused = True  # Auto-pause at key moment
-                time_str = str(timedelta(seconds=int(moment.timestamp)))
-                print(f"⭐ Key Moment #{key_moment_idx + 1}: [{time_str}] {moment.reason}")
-                if moment.tells:
-                    print(f"   Tells: {', '.join(moment.tells)}")
-                if moment.notes:
-                    print(f"   Note: {moment.notes}")
-                key_moment_idx += 1
+            # Jump to next key moment (only Phase 2 moments if applicable)
+            if session:
+                # Filter key moments to Phase 2 only if we have calibration data
+                if session.calibration_end_time:
+                    calibration_end = session.calibration_end_time - session.start_time
+                    # Use timestamp filtering instead of frame number (more reliable)
+                    phase2_moments = [m for m in session.key_moments if m.timestamp >= calibration_end]
+                else:
+                    phase2_moments = session.key_moments
+                
+                if key_moment_idx < len(phase2_moments):
+                    moment = phase2_moments[key_moment_idx]
+                    
+                    # Use timestamp to calculate frame position (more reliable)
+                    target_frame = int(moment.timestamp * fps)
+                    target_frame = max(0, min(target_frame, total_frames - 1))
+                    
+                    print(f"🔍 Jumping to Key Moment #{key_moment_idx + 1}/{len(phase2_moments)}")
+                    print(f"   Timestamp: {moment.timestamp:.1f}s -> Frame: {target_frame}")
+                    print(f"   Original frame_number: {moment.frame_number}")
+                    
+                    current_frame = target_frame
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+                    need_frame_read = True
+                    paused = True  # Auto-pause at key moment
+                    time_str = str(timedelta(seconds=int(moment.timestamp)))
+                    print(f"⭐ Key Moment: [{time_str}] {moment.reason}")
+                    if moment.tells:
+                        print(f"   Tells: {', '.join(moment.tells)}")
+                    if moment.notes:
+                        print(f"   Note: {moment.notes}")
+                    key_moment_idx += 1
+                else:
+                    print(f"ℹ️  No more key moments (found {len(phase2_moments)} total)")
+                    key_moment_idx = 0  # Reset to beginning
             else:
-                print("ℹ️  No more key moments")
-                key_moment_idx = 0  # Reset to beginning
+                print("ℹ️  No session data available")
         elif key_char == ord('s') or key_char == ord('S'):
             if session:
                 session.print_summary()
         elif key_char == ord('r') or key_char == ord('R'):
-            # Reset to beginning
-            current_frame = 0
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            # Reset to Phase 2 beginning (not video beginning)
+            if session and session.calibration_end_time:
+                calibration_end = session.calibration_end_time - session.start_time
+                phase2_start_frame = int(calibration_end * fps)
+                current_frame = phase2_start_frame
+                cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+                print("⏮️  Reset to interrogation start")
+            else:
+                current_frame = 0
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                print("⏮️  Reset to beginning")
             need_frame_read = True
             paused = True
             key_moment_idx = 0
-            print("⏮️  Reset to beginning")
         elif key != -1 and key_char != 255:
             # Debug: print unknown key codes
             print(f"Debug: key={key}, key_char={key_char}")
@@ -563,6 +680,62 @@ def draw_timeline(frame, current_frame, total_frames, key_moments, fps):
     # Border (bright white)
     cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height),
                  (255, 255, 255), 2)
+
+
+def draw_timeline_phase2(frame, current_frame, total_frames, key_moments, fps, phase2_start_frame):
+    """Draw progress bar for Phase 2 only (interrogation phase)"""
+    h, w = frame.shape[:2]
+    bar_height = 22
+    bar_y = h - bar_height - 10  # 10px from bottom (should be h-32)
+    bar_x = 15
+    bar_width = w - 30
+    
+    # Debug: Ensure timeline is visible by making it brighter
+    print(f"Drawing timeline at y={bar_y}, height={bar_height}, frame size={h}x{w}")
+    
+    # Calculate Phase 2 frames
+    phase2_total_frames = max(1, total_frames - phase2_start_frame)
+    phase2_current_frame = max(0, current_frame - phase2_start_frame)
+    
+    # Background (darker gray for better contrast)
+    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), 
+                 (60, 60, 60), -1)
+    
+    # Progress within Phase 2 only (bright cyan for visibility)
+    progress = phase2_current_frame / phase2_total_frames if phase2_total_frames > 0 else 0
+    cv2.rectangle(frame, (bar_x, bar_y), 
+                 (bar_x + int(bar_width * progress), bar_y + bar_height),
+                 (255, 255, 0), -1)  # Bright yellow
+    
+    # Key moment markers (only from Phase 2, bright yellow vertical lines)
+    calibration_end = (phase2_start_frame / fps) if fps > 0 else 0
+    for moment in key_moments:
+        if moment.timestamp >= calibration_end:
+            # Map moment to Phase 2 timeline using timestamp
+            moment_phase2_time = moment.timestamp - calibration_end
+            phase2_total_time = (phase2_total_frames / fps) if fps > 0 else 1
+            marker_progress = moment_phase2_time / phase2_total_time if phase2_total_time > 0 else 0
+            marker_x = bar_x + int(marker_progress * bar_width)
+            # Draw thicker yellow line
+            cv2.line(frame, (marker_x, bar_y - 2), (marker_x, bar_y + bar_height + 2),
+                    (0, 255, 255), 5)
+    
+    # Current position marker (bright white vertical line with outline)
+    current_x = bar_x + int(progress * bar_width)
+    # Black outline
+    cv2.line(frame, (current_x, bar_y - 6), (current_x, bar_y + bar_height + 6),
+            (0, 0, 0), 5)
+    # White line
+    cv2.line(frame, (current_x, bar_y - 5), (current_x, bar_y + bar_height + 5),
+            (255, 255, 255), 3)
+    
+    # Border (bright white, thicker)
+    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height),
+                 (255, 255, 255), 3)
+    
+    # # Label to indicate this is Phase 2 timeline (brighter text)
+    # cv2.putText(frame, "Phase 2: Interrogation", (bar_x, bar_y - 8),
+    #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
 
 def get_stress_color(stress_level):

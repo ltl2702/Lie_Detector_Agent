@@ -273,8 +273,8 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         frame_count = 0
         calibration_start_time = time.time()
         session_start_time = time.time()  # Track total session time for alerts
-        CALIBRATION_TIME = 120  # 2 minutes in seconds
-        # CALIBRATION_TIME = 20  # 20s for testing
+        # CALIBRATION_TIME = 120  # 2 minutes in seconds
+        CALIBRATION_TIME = 60  # 60s for testing
         while cap.isOpened():
             success, image = cap.read()
             if not success: continue
@@ -366,10 +366,10 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                 
                 # Ready indicator with baseline info
-                baseline_info = f"CALIBRATED - Ready for interrogation | Baseline BPM: {dd.baseline['bpm']:.0f}"
+                baseline_info = f"Baseline - BPM: {dd.baseline['bpm']:.0f} | Blinks: {dd.baseline['blink_rate']:.0f}/min | Gaze: {dd.baseline['gaze_stability']:.3f} | Emotion: {dd.baseline['emotion']} | Hand: {dd.baseline['hand_face_frequency']:.0%}"
                 cv2.putText(image, baseline_info, 
                            (10, banner_y_start + 50), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 
                 # Stress level indicator with color coding
                 cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
@@ -383,7 +383,7 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                 detection_tells = {k: v for k, v in current_tells.items() if k != 'avg_bpms'}
                 alert = alerts.process_indicators(detection_tells, stress_level, elapsed_time)
                 
-                # Track in review session
+                # Track in review session (only during interrogation phase)
                 if review_session and calibrated:
                     review_session.add_event(current_tells, stress_level, 
                                             alert.confidence if alert else 0.0, frame_count)
@@ -441,10 +441,12 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
             #     calibrated = not calibrated
             #     if not calibrated:
             #         calibration_start_time = time.time()  # Reset timer
-            elif key == ord('b'):  # Bookmark key moment
+            elif key == ord('b'):  # Bookmark key moment (only in interrogation phase)
                 if review_session and calibrated:
                     review_session.add_manual_marker("Manual bookmark")
                     print("⭐ Key moment bookmarked")
+                elif not calibrated:
+                    print("⚠️ Bookmarks only available during interrogation phase")
             if cv2.getWindowProperty('Lie Detector - Webcam', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
@@ -642,10 +644,10 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                     
                     # Ready indicator with baseline info
-                    baseline_info = f"CALIBRATED - Ready for interrogation | Baseline BPM: {dd.baseline['bpm']:.0f}"
+                    baseline_info = f"Baseline - BPM: {dd.baseline['bpm']:.0f} | Blinks: {dd.baseline['blink_rate']:.0f}/min | Gaze: {dd.baseline['gaze_stability']:.3f} | Emotion: {dd.baseline['emotion']} | Hand: {dd.baseline['hand_face_frequency']:.0%}"
                     cv2.putText(image, baseline_info, 
                                (10, banner_y_start + 50), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     
                     # Stress level indicator with color coding
                     cv2.putText(image, f"STRESS LEVEL: {stress_text}", 
@@ -659,8 +661,8 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                     detection_tells = {k: v for k, v in current_tells.items() if k != 'avg_bpms'}
                     alert = alerts.process_indicators(detection_tells, stress_level, elapsed_time)
                     
-                    # Track in review session
-                    if review_session:
+                    # Track in review session (only during interrogation phase)
+                    if review_session and calibrated:
                         review_session.add_event(current_tells, stress_level,
                                                 alert.confidence if alert else 0.0, processed_count)
                         if alert:
@@ -724,10 +726,12 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
             #     calibrated = not calibrated
             #     if not calibrated:
             #         calibration_start_frame = processed_count
-            elif key == ord('b'):  # Bookmark
+            elif key == ord('b'):  # Bookmark (only in interrogation phase)
                 if review_session and calibrated:
                     review_session.add_manual_marker("Manual bookmark")
                     print("⭐ Key moment bookmarked")
+                elif not calibrated:
+                    print("⚠️ Bookmarks only available during interrogation phase")
             if cv2.getWindowProperty('Lie Detector - Video Analysis', cv2.WND_PROP_VISIBLE) < 1: break
 
     cap.release()
