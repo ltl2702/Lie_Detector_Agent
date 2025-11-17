@@ -24,6 +24,9 @@ line = None
 peakpts = None
 last_chart_update = 0
 
+CURRENT_ACTIVE_ALERT = None # Sẽ lưu (alert_object, timestamp)
+ALERT_LATCH_DURATION = 4.0 # Giữ alert trên màn hình trong 4 giây
+
 # Colors
 COLOR_BACKGROUND = (20, 20, 20)
 COLOR_BUTTON = (50, 50, 50)
@@ -368,43 +371,118 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                 
                 # Process tells through alert system (clustering + priority)
-                alert = alerts.process_indicators(current_tells, stress_level)
+                # alert = alerts.process_indicators(current_tells, stress_level)
                 
-                # Track in review session
-                if review_session and calibrated:
-                    review_session.add_event(current_tells, stress_level, 
-                                            alert.confidence if alert else 0.0, frame_count)
-                    if alert:
-                        review_session.add_key_moment(alert.indicators, alert.confidence, 
+                # # Track in review session
+                # if review_session and calibrated:
+                #     review_session.add_event(current_tells, stress_level, 
+                #                             alert.confidence if alert else 0.0, frame_count)
+                #     if alert:
+                #         review_session.add_key_moment(alert.indicators, alert.confidence, 
+                #                                      "alert_cluster")
+                
+                # alert_x = image.shape[1] - 350
+                # if alert:
+                #     # Lấy cấp độ ưu tiên và màu sắc tương ứng
+                #     priority_level = alert.details.get('priority_level', 'HIGH') # Mặc định là HIGH nếu không tìm thấy
+                #     alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255)) # Mặc định là Đỏ
+
+                #     text = alerts.overlay_text_for_alert(alert)
+                #     cv2.putText(image, text,
+                #             (alert_x, banner_y_start + 30),
+                #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2) # <-- SỬ DỤNG MÀU ĐỘNG
+
+                #     cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                #             (alert_x, banner_y_start + 60),
+                #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                #     try:
+                #         alerts.play_alert_sound()
+                #     except Exception:
+                #         pass
+                # else:
+                #     # Lower-confidence visual hint (keep previous behavior)
+                #     if len(current_tells) > 1:
+                #         cv2.putText(image, "DEVIATION DETECTED!",
+                #                    (alert_x, banner_y_start + 30),
+                #                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                #         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                #                    (alert_x, banner_y_start + 60),
+                #                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                # --- START STABILIZATION LOGIC ---
+            
+                # 1. Process indicators để lấy một alert *mới* (nếu có)
+                ts = time.time() 
+                new_alert = alerts.process_indicators(current_tells, stress_level, timestamp=ts)
+                
+                # 2. Kiểm tra xem alert mới có vừa xuất hiện không
+                if new_alert:
+                    # Lưu alert mới này và reset đồng hồ đếm ngược
+                    CURRENT_ACTIVE_ALERT = (new_alert, ts)
+                    
+                    # Thêm sự kiện "thật" này vào review session
+                    if review_session and calibrated:
+                        review_session.add_event(current_tells, stress_level, 
+                                                new_alert.confidence, frame_count)
+                        review_session.add_key_moment(new_alert.indicators, new_alert.confidence, 
                                                      "alert_cluster")
                 
+                # 3. Kiểm tra xem alert *đang hiển thị* (mới hoặc cũ) đã hết hạn chưa
+                active_alert_to_draw = None
+                if CURRENT_ACTIVE_ALERT:
+                    alert_obj, alert_time = CURRENT_ACTIVE_ALERT
+                    if ts - alert_time < ALERT_LATCH_DURATION:
+                        # Chưa hết hạn: Đặt nó làm alert để vẽ
+                        active_alert_to_draw = alert_obj
+                    else:
+                        # Hết hạn: Xóa nó đi
+                        CURRENT_ACTIVE_ALERT = None
+
+                # 4. Ghi lại review session cho các frame *không* có alert mới
+                if not new_alert and review_session and calibrated:
+                     review_session.add_event(current_tells, stress_level, 
+                                             0.0, frame_count) # Ghi lại với confidence = 0
+                
+                # --- END STABILIZATION LOGIC ---
+
+                
+                # --- START DRAWING LOGIC (Sử dụng 'active_alert_to_draw') ---
                 alert_x = image.shape[1] - 350
-                if alert:
+                # Vị trí banner_y_start được định nghĩa ở trên (bằng 0), nhưng chúng ta muốn vẽ *dưới* banner
+                draw_y_pos = banner_height + 10 # Vị trí Y để bắt đầu vẽ alert (dưới banner)
+
+                
+                # 'active_alert_to_draw' thay thế cho 'alert' cũ
+                if active_alert_to_draw:
                     # Lấy cấp độ ưu tiên và màu sắc tương ứng
-                    priority_level = alert.details.get('priority_level', 'HIGH') # Mặc định là HIGH nếu không tìm thấy
-                    alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255)) # Mặc định là Đỏ
-
-                    text = alerts.overlay_text_for_alert(alert)
+                    priority_level = active_alert_to_draw.details.get('priority_level', 'HIGH')
+                    alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255))
+                    
+                    text = alerts.overlay_text_for_alert(active_alert_to_draw)
                     cv2.putText(image, text,
-                            (alert_x, banner_y_start + 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2) # <-- SỬ DỤNG MÀU ĐỘNG
-
+                               (alert_x, draw_y_pos), # Sử dụng draw_y_pos
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2)
+                    
                     cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                            (alert_x, banner_y_start + 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-                    try:
-                        alerts.play_alert_sound()
-                    except Exception:
-                        pass
+                               (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    
+                    # QUAN TRỌNG: Chỉ phát âm thanh KHI ALERT MỚI XUẤT HIỆN
+                    if new_alert: 
+                        try:
+                            alerts.play_alert_sound()
+                        except Exception:
+                            pass
                 else:
-                    # Lower-confidence visual hint (keep previous behavior)
+                    # Lower-confidence visual hint (nếu không có alert nào đang active)
                     if len(current_tells) > 1:
                         cv2.putText(image, "DEVIATION DETECTED!",
-                                   (alert_x, banner_y_start + 30),
+                                   (alert_x, draw_y_pos), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                   (alert_x, banner_y_start + 60),
+                                   (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                
+                # --- END DRAWING LOGIC ---
             
             # Add truth meter and text BELOW banner
             dd.add_text(image, current_tells, calibrated, banner_height)
@@ -615,42 +693,117 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, stress_color, 2)
                     
                     # Process tells through alert system (clustering + priority)
-                    alert = alerts.process_indicators(current_tells, stress_level)
+                    # alert = alerts.process_indicators(current_tells, stress_level)
                     
-                    # Track in review session
-                    if review_session:
-                        review_session.add_event(current_tells, stress_level,
-                                                alert.confidence if alert else 0.0, processed_count)
-                        if alert:
-                            review_session.add_key_moment(alert.indicators, alert.confidence,
-                                                         "alert_cluster")
+                    # # Track in review session
+                    # if review_session:
+                    #     review_session.add_event(current_tells, stress_level,
+                    #                             alert.confidence if alert else 0.0, processed_count)
+                    #     if alert:
+                    #         review_session.add_key_moment(alert.indicators, alert.confidence,
+                    #                                      "alert_cluster")
                     
-                    alert_x = image.shape[1] - 350
-                    if alert:
-                        # Lấy cấp độ ưu tiên và màu sắc tương ứng
-                        priority_level = alert.details.get('priority_level', 'HIGH') # Mặc định là HIGH nếu không tìm thấy
-                        alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255)) # Mặc định là Đỏ
+                    # alert_x = image.shape[1] - 350
+                    # if alert:
+                    #     # Lấy cấp độ ưu tiên và màu sắc tương ứng
+                    #     priority_level = alert.details.get('priority_level', 'HIGH') # Mặc định là HIGH nếu không tìm thấy
+                    #     alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255)) # Mặc định là Đỏ
 
-                        text = alerts.overlay_text_for_alert(alert)
-                        cv2.putText(image, text,
-                                (alert_x, banner_y_start + 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2) # <-- SỬ DỤNG MÀU ĐỘNG
+                    #     text = alerts.overlay_text_for_alert(alert)
+                    #     cv2.putText(image, text,
+                    #             (alert_x, banner_y_start + 30),
+                    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2) # <-- SỬ DỤNG MÀU ĐỘNG
 
-                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                (alert_x, banner_y_start + 60),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    #     cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                    #             (alert_x, banner_y_start + 60),
+                    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    #     try:
+                    #         alerts.play_alert_sound()
+                    #     except Exception:
+                    #         pass
+                    # else:
+                    #     if len(current_tells) > 1:
+                    #         cv2.putText(image, "DEVIATION DETECTED!",
+                    #                    (alert_x, banner_y_start + 30),
+                    #                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    #         cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                    #                    (alert_x, banner_y_start + 60),
+                    #                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    # --- START STABILIZATION LOGIC ---
+            
+                # 1. Process indicators để lấy một alert *mới* (nếu có)
+                ts = time.time() 
+                new_alert = alerts.process_indicators(current_tells, stress_level, timestamp=ts)
+                
+                # 2. Kiểm tra xem alert mới có vừa xuất hiện không
+                if new_alert:
+                    # Lưu alert mới này và reset đồng hồ đếm ngược
+                    CURRENT_ACTIVE_ALERT = (new_alert, ts)
+                    
+                    # Thêm sự kiện "thật" này vào review session
+                    if review_session and calibrated:
+                        review_session.add_event(current_tells, stress_level, 
+                                                new_alert.confidence, frame_count)
+                        review_session.add_key_moment(new_alert.indicators, new_alert.confidence, 
+                                                     "alert_cluster")
+                
+                # 3. Kiểm tra xem alert *đang hiển thị* (mới hoặc cũ) đã hết hạn chưa
+                active_alert_to_draw = None
+                if CURRENT_ACTIVE_ALERT:
+                    alert_obj, alert_time = CURRENT_ACTIVE_ALERT
+                    if ts - alert_time < ALERT_LATCH_DURATION:
+                        # Chưa hết hạn: Đặt nó làm alert để vẽ
+                        active_alert_to_draw = alert_obj
+                    else:
+                        # Hết hạn: Xóa nó đi
+                        CURRENT_ACTIVE_ALERT = None
+
+                # 4. Ghi lại review session cho các frame *không* có alert mới
+                if not new_alert and review_session and calibrated:
+                     review_session.add_event(current_tells, stress_level, 
+                                             0.0, frame_count) # Ghi lại với confidence = 0
+                
+                # --- END STABILIZATION LOGIC ---
+
+                
+                # --- START DRAWING LOGIC (Sử dụng 'active_alert_to_draw') ---
+                alert_x = image.shape[1] - 350
+                # Vị trí banner_y_start được định nghĩa ở trên (bằng 0), nhưng chúng ta muốn vẽ *dưới* banner
+                draw_y_pos = banner_height + 10 # Vị trí Y để bắt đầu vẽ alert (dưới banner)
+
+                
+                # 'active_alert_to_draw' thay thế cho 'alert' cũ
+                if active_alert_to_draw:
+                    # Lấy cấp độ ưu tiên và màu sắc tương ứng
+                    priority_level = active_alert_to_draw.details.get('priority_level', 'HIGH')
+                    alert_color = ALERT_COLORS.get(priority_level, (0, 0, 255))
+                    
+                    text = alerts.overlay_text_for_alert(active_alert_to_draw)
+                    cv2.putText(image, text,
+                               (alert_x, draw_y_pos), # Sử dụng draw_y_pos
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, alert_color, 2)
+                    
+                    cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                               (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                    
+                    # QUAN TRỌNG: Chỉ phát âm thanh KHI ALERT MỚI XUẤT HIỆN
+                    if new_alert: 
                         try:
                             alerts.play_alert_sound()
                         except Exception:
                             pass
-                    else:
-                        if len(current_tells) > 1:
-                            cv2.putText(image, "DEVIATION DETECTED!",
-                                       (alert_x, banner_y_start + 30),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                            cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
-                                       (alert_x, banner_y_start + 60),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                else:
+                    # Lower-confidence visual hint (nếu không có alert nào đang active)
+                    if len(current_tells) > 1:
+                        cv2.putText(image, "DEVIATION DETECTED!",
+                                   (alert_x, draw_y_pos), # Sử dụng draw_y_pos
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.putText(image, f"Active Tells: {len(current_tells) - 1}",
+                                   (alert_x, draw_y_pos + 30), # Sử dụng draw_y_pos
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                
+                # --- END DRAWING LOGIC ---
                 
                 # Add truth meter and text BELOW banner
                 dd.add_text(image, current_tells, calibrated, banner_height)

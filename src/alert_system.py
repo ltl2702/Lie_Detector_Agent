@@ -160,9 +160,21 @@ class AlertManager:
         # enqueue for record keeping
         self.enqueue(alert)
 
-        # If alert confidence is high enough, return it for immediate attention
+        # If alert confidence is high enough, check for false positives before returning
         if confidence >= self.ALERT_CONFIDENCE_THRESHOLD:
+            
+            # GỌI HÀM LỌC TẠI ĐÂY
+            # Lấy danh sách các 'tell' duy nhất từ cluster
+            indicator_keys = list(set(cluster)) 
+            
+            if not self.reduce_false_positive(indicator_keys):
+                # Bị lọc! Trả về None (không có alert)
+                return None 
+            
+            # Vượt qua bộ lọc, trả về alert
             return alert
+            
+        # Confidence không đủ cao
         return None
 
     def get_pending(self, limit=5):
