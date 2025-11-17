@@ -248,8 +248,12 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
 
     if enable_recording:
+        # Ensure recordings directory exists
+        recordings_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'recordings')
+        os.makedirs(recordings_dir, exist_ok=True)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"interrogation_{timestamp}.avi"
+        filename = os.path.join(recordings_dir, f"interrogation_{timestamp}.avi")
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         recording = cv2.VideoWriter(filename, fourcc, 10, (1280, 720))
         if review_session:
@@ -428,7 +432,10 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
     # Save review session
     if review_session:
         review_session.print_summary()
-        session_file = review_session.save()
+        # Ensure sessions directory exists
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'sessions')
+        os.makedirs(sessions_dir, exist_ok=True)
+        session_file = review_session.save(sessions_dir)
         print(f"\n💾 Review session saved: {session_file}")
     
     cv2.destroyAllWindows()
@@ -477,8 +484,12 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     print(f"Calibration: {CALIBRATION_TIME:.1f}s, Processing: {effective_fps:.1f} FPS (skip every {frame_skip} frames)")
 
     if enable_recording:
+        # Ensure recordings directory exists
+        recordings_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'recordings')
+        os.makedirs(recordings_dir, exist_ok=True)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"analyzed_{timestamp}.avi"
+        filename = os.path.join(recordings_dir, f"analyzed_{timestamp}.avi")
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         recording = cv2.VideoWriter(filename, fourcc, effective_fps, (w, h))
         if review_session:
@@ -677,7 +688,10 @@ def play_video(video_file, draw_landmarks=False, enable_recording=False, enable_
     # Save review session
     if review_session:
         review_session.print_summary()
-        session_file = review_session.save()
+        # Ensure sessions directory exists
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'sessions')
+        os.makedirs(sessions_dir, exist_ok=True)
+        session_file = review_session.save(sessions_dir)
         print(f"\n💾 Review session saved: {session_file}")
     
     cv2.destroyAllWindows()

@@ -4,6 +4,7 @@ Timeline playback with synchronized tells, key moment markers, and statistical s
 """
 
 import json
+import os
 import time
 import cv2
 import numpy as np
@@ -212,10 +213,12 @@ class ReviewSession:
             key_moments_count=len(self.key_moments)
         )
     
-    def save(self, filepath: str = None):
+    def save(self, sessions_dir: str = None):
         """Save session to JSON file"""
-        if filepath is None:
+        if sessions_dir is None:
             filepath = f"{self.session_name}_review.json"
+        else:
+            filepath = os.path.join(sessions_dir, f"{self.session_name}_review.json")
         
         data = {
             'session_name': self.session_name,
