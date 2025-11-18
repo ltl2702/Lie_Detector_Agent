@@ -19,7 +19,7 @@ class SessionMemory:
     behavioral_patterns: Dict[str, Any]
     adaptive_thresholds: Dict[str, float]
     
-    
+       
 class AdaptiveThresholdManager:
     """
     Quản lý adaptive thresholds dựa trên Agent personality/behavior definition
@@ -29,7 +29,7 @@ class AdaptiveThresholdManager:
     def __init__(self):
         # Ngưỡng mặc định ban đầu (% so với baseline)
         self.default_thresholds = {
-            'bpm_change': 20.0,        # +20% so với baseline
+            'bpm_change': 30.0,        # +30% so với baseline
             'blink_rate': 40.0,        # +40% so với baseline  
             'gaze_stability': 50.0,    # +50% so với baseline
             'hand_face_frequency': 20.0,  # +20% so với baseline
@@ -84,7 +84,7 @@ class AdaptiveThresholdManager:
         # Map detection indicators to threshold keys
         indicator_mapping = {
             'hand': 'hand_face_frequency',
-            'bmp_change': 'bpm_change',
+            'bpm_change': 'bpm_change',
             'blinking': 'blink_rate',
             'gaze': 'gaze_stability',
             'lips': 'lip_compression'
