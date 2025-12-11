@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Eye, Hand, Heart, AlertTriangle, TrendingUp, Target } from 'lucide-react';
+import { Activity, Eye, Hand, Heart, AlertTriangle, TrendingUp, Target, History, Video, Square } from 'lucide-react';
 import { io } from 'socket.io-client';
 import api from './services/api';
 import CameraFeed from './components/CameraFeed';
 import TruthMeter from './components/TruthMeter';
 import AlertSystem from './components/AlertSystem';
+import ReviewMode from './components/ReviewMode';
+import SessionHistory from './components/SessionHistory';
 
 export default function LieDetectorApp() {
+  const [viewMode, setViewMode] = useState('live'); // 'live', 'history', 'review'
+  const [selectedSession, setSelectedSession] = useState(null);
+  
   const [cameraActive, setCameraActive] = useState(false);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [calibrationProgress, setCalibrationProgress] = useState(0);
@@ -57,6 +62,53 @@ export default function LieDetectorApp() {
   const wsRef = useRef(null);
   const pollingRef = useRef(null);
   
+  // Handle ending session
+  const handleEndSession = async () => {
+    if (!sessionId) return;
+    
+    try {
+      // Save session data
+      const sessionData = {
+        session_id: sessionId,
+        session_name: `Session_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)}`,
+        start_time: Date.now() / 1000,
+        end_time: Date.now() / 1000,
+        baseline: baseline,
+        tells: tells,
+        metrics: {
+          bpm: bpm,
+          emotion: dominantEmotion,
+          stress_level: stressLevel
+        }
+      };
+      
+      // Call backend to end session
+      await api.endSession(sessionId, sessionData);
+      
+      // Reset state
+      setCameraActive(false);
+      setSessionId(null);
+      setBaseline({
+        bpm: 0,
+        blink_rate: 0,
+        gaze_stability: 0,
+        emotion: 'neutral',
+        hand_face_frequency: 0,
+        calibrated: false
+      });
+      setTells([]);
+      
+      // Disconnect websocket
+      if (wsRef.current) {
+        wsRef.current.disconnect();
+      }
+      
+      alert('Session ended and saved successfully!');
+    } catch (error) {
+      console.error('Error ending session:', error);
+      alert('Failed to end session');
+    }
+  };
 
   // Connect to Socket.IO for real-time updates
   useEffect(() => {
@@ -185,16 +237,16 @@ export default function LieDetectorApp() {
       const response = await api.startSession();
       setSessionId(response.data.session_id);
       
-      // Simulate calibration progress (60 seconds)
+      // Simulate calibration progress (30 seconds)
       const calibrationInterval = setInterval(() => {
         setCalibrationProgress(prev => {
           if (prev >= 100) {
             clearInterval(calibrationInterval);
             completeCalibration();
             return 100;          }
-          return prev + 1; // +1 every 600ms = 60 seconds
+          return prev + 1; // +1 every 300ms = 30 seconds
         });
-      }, 600);
+      }, 300);
     } catch (error) {
       console.error('Error starting calibration:', error);
       setIsCalibrating(false);
@@ -344,6 +396,7 @@ export default function LieDetectorApp() {
   const addTell = (message, type) => {
     const newTell = {
       id: Date.now() + Math.random(),
+      timestamp: Date.now() / 1000,
       message,
       type,
       ttl: 10 // 10 seconds
@@ -442,54 +495,110 @@ export default function LieDetectorApp() {
           onDismiss={() => setShowAlert(false)}
         />
         
-        {/* Header */}
-        <div className="mb-6 flex items-center justify-end gap-4">
-          {/* Baseline Info */}
+        {/* Review Mode Modal */}
+        {viewMode === 'review' && selectedSession && (
+          <ReviewMode 
+            sessionData={selectedSession}
+            onClose={() => {
+              setViewMode('history');
+              setSelectedSession(null);
+            }}
+          />
+        )}
+        
+        {/* Header with View Switcher */}
+        <div className="mb-6 flex items-center justify-between gap-4">
+          {/* View Mode Buttons */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setViewMode('live')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
+                viewMode === 'live' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              <Video className="w-4 h-4" />
+              <span>Live Detection</span>
+            </button>
+            <button
+              onClick={() => setViewMode('history')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
+                viewMode === 'history' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              <History className="w-4 h-4" />
+              <span>Session History</span>
+            </button>
+          </div>
+
+          {/* Baseline Info & End Session Button */}
           <div className="flex items-center gap-3">
-            {baseline.calibrated && (
-              <div className="flex items-center gap-2 text-sm bg-green-900 bg-opacity-30 px-3 py-1 rounded-lg border border-green-600">
-                <Target className="w-4 h-4 text-green-400" />
-                <span className="text-green-400">Baseline: {baseline.bpm.toFixed(1)} BPM | {baseline.blink_rate.toFixed(1)}/min</span>
-              </div>
+            {baseline.calibrated && viewMode === 'live' && (
+              <>
+                <div className="flex items-center gap-2 text-sm bg-green-900 bg-opacity-30 px-3 py-1 rounded-lg border border-green-600">
+                  <Target className="w-4 h-4 text-green-400" />
+                  <span className="text-green-400">Baseline: {baseline.bpm.toFixed(1)} BPM | {baseline.blink_rate.toFixed(1)}/min</span>
+                </div>
+                <button
+                  onClick={handleEndSession}
+                  className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg flex items-center gap-2 transition"
+                >
+                  <Square className="w-4 h-4" />
+                  End Session
+                </button>
+              </>
             )}
           </div>
         </div>
 
+        {viewMode === 'history' ? (
+          /* Session History View */
+          <SessionHistory 
+            onSelectSession={(session) => {
+              setSelectedSession(session);
+              setViewMode('review');
+            }}
+          />
+        ) : (
+          /* Live Detection View */
         <div className="grid grid-cols-12 gap-6">
-          {/* Sidebar */}
-          <div className="col-span-3 bg-gray-800 rounded-lg p-4 space-y-2">
-            <div className="text-sm space-y-2">
-              <div className="flex items-center gap-2 p-2 bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Overview</span>
+          {/* Left Sidebar - Emotion Analysis */}
+          <div className="col-span-3 space-y-4">
+            {/* Emotion Analysis - FER Style */}
+            <div className="bg-gray-800 rounded-lg p-5">
+              <h3 className="text-lg font-bold mb-4 flex items-center justify-between">
+                <span>Emotion (FER)</span>
+                <span className={`text-sm px-3 py-1.5 rounded font-semibold`} style={{
+                  backgroundColor: `${getEmotionColor(dominantEmotion)}20`,
+                  color: getEmotionColor(dominantEmotion)
+                }}>
+                  {dominantEmotion} ({(emotionConfidence * 100).toFixed(0)}%)
+                </span>
+              </h3>
+              <div className="space-y-3">
+                {Object.entries(emotionData).map(([emotion, value]) => (
+                  <div key={emotion}>
+                    <div className="flex justify-between text-sm mb-1.5">
+                      <span className="capitalize font-medium">{emotion}</span>
+                      <span className="text-gray-400 font-semibold">{value.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{ 
+                          width: `${value}%`,
+                          backgroundColor: getEmotionColor(emotion)
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Requirements</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Installation</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Usage</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Algorithm Details</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Calibration</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Controls</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer">
-                <div className="w-4 h-4 bg-gray-600 rounded"></div>
-                <span>Limitations</span>
+              <div className="mt-4 pt-4 border-t border-gray-700 text-sm text-gray-400">
+                <p>Detection via FER (Facial Emotion Recognition) with MTCNN</p>
               </div>
             </div>
           </div>
@@ -565,28 +674,28 @@ export default function LieDetectorApp() {
             {cameraActive && baseline.calibrated && (
               <>
                 {/* Heart Rate Display with Graph */}
-                <div className="flex gap-3 items-center">
+                <div className="flex gap-4 items-center">
                   {/* Current BPM */}
-                  <div className={`bg-gray-900 bg-opacity-80 rounded-lg p-3 flex items-center gap-2 ${getBpmColor()}`}>
-                    <Heart className="w-5 h-5" />
-                    <span className="text-xl font-bold">{bpm.toFixed(1)} BPM</span>
+                  <div className={`bg-gray-900 bg-opacity-80 rounded-lg p-4 flex items-center gap-3 ${getBpmColor()}`}>
+                    <Heart className="w-7 h-7" />
+                    <span className="text-3xl font-bold">{bpm.toFixed(1)} BPM</span>
                     {baseline.calibrated && (
-                      <span className="text-xs">
+                      <span className="text-sm font-semibold">
                         ({((bpm - baseline.bpm) / baseline.bpm * 100).toFixed(0)}%)
                       </span>
                     )}
                   </div>
 
                   {/* Mini Graph */}
-                  <div className="bg-gray-900 bg-opacity-80 rounded-lg p-2">
-                    <svg width="200" height="50">
+                  <div className="bg-gray-900 bg-opacity-80 rounded-lg p-3">
+                    <svg width="280" height="70">
                       <polyline
                         fill="none"
                         stroke="#10b981"
-                        strokeWidth="2"
+                        strokeWidth="3"
                         points={Array.from({ length: 50 }, (_, i) => {
-                          const x = i * 4;
-                          const y = 25 + Math.sin(i * 0.3 + Date.now() * 0.01) * 15;
+                          const x = i * 5.6;
+                          const y = 35 + Math.sin(i * 0.3 + Date.now() * 0.01) * 20;
                           return `${x},${y}`;
                         }).join(' ')}
                       />
@@ -597,29 +706,29 @@ export default function LieDetectorApp() {
             )}
 
             {/* Status Bar & Detection Tells */}
-            <div className="space-y-2">
-              <div className={`${stressColor.includes('green') ? 'bg-green-900 border-green-600' : stressColor.includes('yellow') ? 'bg-yellow-900 border-yellow-600' : 'bg-red-900 border-red-600'} border rounded-lg p-3 flex items-center justify-between`}>
+            <div className="space-y-3">
+              <div className={`${stressColor.includes('green') ? 'bg-green-900 border-green-600' : stressColor.includes('yellow') ? 'bg-yellow-900 border-yellow-600' : 'bg-red-900 border-red-600'} border-2 rounded-lg p-4 flex items-center justify-between`}>
                 <div>
-                  <span className="text-sm font-semibold">
+                  <span className="text-lg font-bold">
                     {isCalibrating ? 'Status: Calibrating baseline...' : 
                      baseline.calibrated ? `Status: ${stressLevel}` : 
                      'Status: Ready to calibrate'}
                   </span>
                 </div>
                 {analyzing && (
-                  <div className="flex gap-1">
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
+                  <div className="flex gap-1.5">
+                    <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                    <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+                    <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
                   </div>
                 )}
               </div>
               
               {/* Detection Tells */}
               {tells.map(tell => (
-                <div key={tell.id} className="bg-yellow-900 bg-opacity-50 border border-yellow-600 rounded-lg p-2 flex items-center justify-between animate-pulse">
-                  <span className="text-sm text-yellow-200">{tell.message}</span>
-                  <span className="text-xs text-yellow-400">{tell.ttl}s</span>
+                <div key={tell.id} className="bg-yellow-900 bg-opacity-50 border-2 border-yellow-600 rounded-lg p-3 flex items-center justify-between animate-pulse">
+                  <span className="text-base font-semibold text-yellow-200">{tell.message}</span>
+                  <span className="text-sm text-yellow-400 font-bold">{tell.ttl}s</span>
                 </div>
               ))}
             </div>
@@ -628,9 +737,9 @@ export default function LieDetectorApp() {
           {/* Right Sidebar - Analytics */}
           <div className="col-span-3 space-y-4">
             {/* Blink Pattern */}
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-sm font-semibold mb-3">Blink Pattern</h3>
-              <div className="h-24 flex items-end gap-1">
+            <div className="bg-gray-800 rounded-lg p-5">
+              <h3 className="text-lg font-bold mb-4">Blink Pattern</h3>
+              <div className="h-32 flex items-end gap-1.5">
                 {blinkRate.map((rate, i) => (
                   <div 
                     key={i}
@@ -640,86 +749,52 @@ export default function LieDetectorApp() {
                 ))}
               </div>
               {baseline.calibrated && (
-                <div className="mt-2 text-xs text-gray-400">
+                <div className="mt-3 text-sm text-gray-400 font-medium">
                   Baseline: {baseline.blink_rate.toFixed(1)}/min
                 </div>
               )}
             </div>
 
-            {/* Emotion Analysis - FER Style */}
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-sm font-semibold mb-3 flex items-center justify-between">
-                <span>Emotion (FER)</span>
-                <span className={`text-xs px-2 py-1 rounded`} style={{
-                  backgroundColor: `${getEmotionColor(dominantEmotion)}20`,
-                  color: getEmotionColor(dominantEmotion)
-                }}>
-                  {dominantEmotion} ({(emotionConfidence * 100).toFixed(0)}%)
-                </span>
-              </h3>
-              <div className="space-y-2">
-                {Object.entries(emotionData).map(([emotion, value]) => (
-                  <div key={emotion}>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="capitalize">{emotion}</span>
-                      <span className="text-gray-400">{value.toFixed(1)}%</span>
-                    </div>
-                    <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{ 
-                          width: `${value}%`,
-                          backgroundColor: getEmotionColor(emotion)
-                        }}
-                      ></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-400">
-                <p>Detection via FER (Facial Emotion Recognition) with MTCNN</p>
-              </div>
-            </div>
-
             {/* Hand-to-Face Gesture */}
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-sm font-semibold mb-3">Hand-to-Face Contact</h3>
+            <div className="bg-gray-800 rounded-lg p-5">
+              <h3 className="text-lg font-bold mb-4">Hand-to-Face Contact</h3>
               <div className="flex items-center justify-center">
-                <div className="relative w-32 h-32">
+                <div className="relative w-40 h-40">
                   <svg className="w-full h-full transform -rotate-90">
                     <circle
-                      cx="64"
-                      cy="64"
-                      r="56"
+                      cx="80"
+                      cy="80"
+                      r="70"
                       stroke="#374151"
-                      strokeWidth="8"
+                      strokeWidth="10"
                       fill="none"
                     />
                     <circle
-                      cx="64"
-                      cy="64"
-                      r="56"
+                      cx="80"
+                      cy="80"
+                      r="70"
                       stroke="#10b981"
-                      strokeWidth="8"
+                      strokeWidth="10"
                       fill="none"
-                      strokeDasharray={`${gestureScore * 3.52} 352`}
+                      strokeDasharray={`${gestureScore * 4.4} 440`}
                       className="transition-all duration-500"
                     />
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <Hand className="w-8 h-8 text-green-400 mb-1" />
-                    <span className="text-xl font-bold">{Math.round(gestureScore)}</span>
+                    <Hand className="w-10 h-10 text-green-400 mb-2" />
+                    <span className="text-2xl font-bold">{Math.round(gestureScore)}</span>
                   </div>
                 </div>
               </div>
               {baseline.calibrated && (
-                <div className="mt-2 text-xs text-gray-400 text-center">
+                <div className="mt-3 text-sm text-gray-400 text-center font-medium">
                   Baseline frequency: {(baseline.hand_face_frequency * 100).toFixed(1)}%
                 </div>
               )}
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

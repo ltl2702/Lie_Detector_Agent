@@ -18,7 +18,7 @@ api.getMetrics = (sessionId) => api.get(`/api/session/${sessionId}/metrics`);
 api.getBaseline = (sessionId) => api.get(`/api/session/${sessionId}/baseline`);
 api.calibrateSession = (sessionId) => api.post(`/api/session/${sessionId}/calibrate`);
 api.getCameraFrame = (sessionId) => api.get(`/api/session/${sessionId}/camera/frame`);
-api.endSession = (sessionId) => api.post(`/api/session/${sessionId}/end`);
+api.endSession = (sessionId, sessionData) => api.post(`/api/session/${sessionId}/end`, sessionData);
 api.getHistory = () => api.get('/api/sessions');
 api.controlCamera = (action) => api.post('/api/camera/control', { action });
 api.getSessionData = (sessionId) => api.get(`/api/session/${sessionId}/data`);

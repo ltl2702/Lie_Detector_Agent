@@ -11,6 +11,7 @@ import os
 import threading
 import uuid
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -153,26 +154,58 @@ def start_session():
 
 @app.route('/api/session/<session_id>/end', methods=['POST'])
 def end_session(session_id):
-    """End a detection session"""
+    """End a detection session and save to file"""
     try:
         if session_id in sessions:
             session = sessions[session_id]
             if session.camera_running:
-                session.camera_running = False
+                session.stop_camera_capture()
             
-            # Save session data if memory system available
-            try:
-                memory_file = ms.memory_system.save_session()
-                print(f"📝 Session {session_id} saved to {memory_file}")
-            except:
-                pass
+            # Get session data from request if provided
+            request_data = request.get_json() if request.is_json else {}
             
+            # Create session review data
+            session_data = {
+                'session_id': session_id,
+                'session_name': request_data.get('session_name', f'Session_{datetime.now().strftime("%Y%m%d_%H%M%S")}'),
+                'start_time': session.created_at.timestamp(),
+                'end_time': datetime.now().timestamp(),
+                'calibration_end_time': datetime.now().timestamp(),
+                'baseline': request_data.get('baseline', session.baseline) if session.baseline else {},
+                'tells': request_data.get('tells', session.tells),
+                'metrics': request_data.get('metrics', session.metrics),
+                'frame_count': session.frame_count,
+                'fps': 30,
+                'events': [
+                    {
+                        'timestamp': tell.get('timestamp', 0),
+                        'type': tell.get('type', 'detection'),
+                        'message': tell.get('message', '')
+                    } for tell in session.tells
+                ] if session.tells else [],
+                'video_file': None
+            }
+            
+            # Save to sessions directory
+            sessions_dir = Path(__file__).parent.parent / 'sessions'
+            sessions_dir.mkdir(exist_ok=True)
+            
+            session_filename = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_review.json"
+            session_filepath = sessions_dir / session_filename
+            
+            with open(session_filepath, 'w') as f:
+                json.dump(session_data, f, indent=2)
+            
+            print(f"📝 Session {session_id} saved to {session_filepath}")
+            
+            # Clean up session
             del sessions[session_id]
             print(f"🏁 Ended session: {session_id}")
             
             return jsonify({
                 'status': 'success',
-                'message': 'Session ended'
+                'message': 'Session ended and saved',
+                'session_file': str(session_filename)
             }), 200
         else:
             return jsonify({
@@ -180,6 +213,8 @@ def end_session(session_id):
                 'message': 'Session not found'
             }), 404
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -291,7 +326,7 @@ def get_session_data(session_id):
             'message': str(e)
         }), 400
 
-@app.route('/api/sessions', methods=['GET'])
+@app.route('/api/sessions/active', methods=['GET'])
 def list_sessions():
     """List all active sessions"""
     try:
@@ -579,6 +614,121 @@ def internal_error(error):
         'message': 'Internal server error'
     }), 500
 
+@app.route('/api/sessions', methods=['GET'])
+def get_sessions():
+    """Get list of all review sessions"""
+    try:
+        sessions_dir = Path(__file__).parent.parent / 'sessions'
+        sessions_dir.mkdir(exist_ok=True)
+        
+        session_files = list(sessions_dir.glob('*_review.json'))
+        sessions_list = []
+        
+        for session_file in sorted(session_files, reverse=True):
+            try:
+                with open(session_file, 'r') as f:
+                    session_data = json.load(f)
+                    sessions_list.append(session_data)
+            except Exception as e:
+                print(f"Error loading session {session_file}: {e}")
+                continue
+        
+        return jsonify({
+            'status': 'success',
+            'sessions': sessions_list,
+            'count': len(sessions_list)
+        }), 200
+    except Exception as e:
+        print(f"Error fetching sessions: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/video/<path:video_path>', methods=['GET'])
+def serve_video(video_path):
+    """Serve video files with range request support for streaming"""
+    try:
+        from urllib.parse import unquote
+        import os
+        from flask import Response, stream_with_context
+        
+        # Decode the path
+        video_path = unquote(video_path)
+        
+        # Security check - ensure path is within recordings directory
+        recordings_dir = Path(__file__).parent.parent / 'recordings'
+        recordings_dir.mkdir(exist_ok=True)
+        
+        # If path is absolute, use it directly, otherwise construct from recordings dir
+        if os.path.isabs(video_path):
+            video_file = Path(video_path)
+        else:
+            video_file = recordings_dir / video_path
+        
+        # Check if file exists
+        if not video_file.exists():
+            return jsonify({
+                'status': 'error',
+                'message': f'Video file not found: {video_file}'
+            }), 404
+        
+        # Get file size
+        file_size = os.path.getsize(video_file)
+        
+        # Check for range header (for video seeking)
+        range_header = request.headers.get('Range', None)
+        
+        if range_header:
+            # Parse range header
+            byte_start, byte_end = 0, file_size - 1
+            match = re.search(r'bytes=(\d+)-(\d*)', range_header)
+            if match:
+                byte_start = int(match.group(1))
+                if match.group(2):
+                    byte_end = int(match.group(2))
+            
+            length = byte_end - byte_start + 1
+            
+            # Stream the requested range
+            def generate():
+                with open(video_file, 'rb') as f:
+                    f.seek(byte_start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk_size = min(8192, remaining)
+                        data = f.read(chunk_size)
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+            
+            response = Response(
+                stream_with_context(generate()),
+                status=206,
+                mimetype='video/x-msvideo',
+                direct_passthrough=True
+            )
+            response.headers.add('Content-Range', f'bytes {byte_start}-{byte_end}/{file_size}')
+            response.headers.add('Accept-Ranges', 'bytes')
+            response.headers.add('Content-Length', str(length))
+            return response
+        else:
+            # Serve entire file
+            return send_file(
+                str(video_file),
+                mimetype='video/x-msvideo',
+                as_attachment=False,
+                conditional=True
+            )
+    except Exception as e:
+        print(f"Error serving video: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 if __name__ == '__main__':
     print("🚀 Starting Lie Detector Backend API")
