@@ -3,37 +3,6 @@ from tkinter import filedialog
 import os
 
 
-def get_video_file():
-    """
-    Open file dialog to select a video file
-    Returns path to selected video file or None
-    """
-    # Hide the root tkinter window
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    
-    # File dialog
-    file_path = filedialog.askopenfilename(
-        title="Select Video File",
-        filetypes=[
-            ("Video files", "*.mp4 *.avi *.mov *.mkv *.flv *.wmv"),
-            ("MP4 files", "*.mp4"),
-            ("AVI files", "*.avi"),
-            ("All files", "*.*")
-        ]
-    )
-    
-    root.destroy()
-    
-    if file_path and os.path.exists(file_path):
-        print(f"Selected: {file_path}")
-        return file_path
-    else:
-        print("No file selected")
-        return None
-
-
 def format_timestamp(seconds):
     """
     Convert seconds to MM:SS format
@@ -47,36 +16,6 @@ def format_timestamp(seconds):
     mins = int(seconds // 60)
     secs = int(seconds % 60)
     return f"{mins:02d}:{secs:02d}"
-
-
-def get_video_info(video_path):
-    """
-    Get information about a video file
-    
-    Args:
-        video_path: Path to video file
-        
-    Returns:
-        Dictionary with video info (fps, width, height, frame_count, duration)
-    """
-    import cv2
-    
-    cap = cv2.VideoCapture(video_path)
-    
-    info = {
-        'fps': cap.get(cv2.CAP_PROP_FPS),
-        'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        'frame_count': int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
-        'duration': 0
-    }
-    
-    if info['fps'] > 0:
-        info['duration'] = info['frame_count'] / info['fps']
-    
-    cap.release()
-    
-    return info
 
 
 def create_output_folder(base_name="interrogations"):
