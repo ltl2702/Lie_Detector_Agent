@@ -325,10 +325,14 @@
         });
 
         socket.on('analysis_data', (data) => {
+            // ✅ METRIC VERIFICATION: BPM from backend
             if (data.bpm) {
                 currentBpm = data.bpm;
                 const delta = Math.abs(currentBpm - baseline.bpm);
-                const percentChange = ((currentBpm - baseline.bpm) / baseline.bpm * 100).toFixed(0);
+                const percentChange = baseline.bpm > 0 ? ((currentBpm - baseline.bpm) / baseline.bpm * 100).toFixed(0) : 0;
+                
+                // Console log for debugging
+                console.log(`📊 BPM Update: ${currentBpm.toFixed(1)} (Δ${delta.toFixed(1)}, ${percentChange > 0 ? '+' : ''}${percentChange}% vs baseline: ${baseline.bpm.toFixed(1)})`);
                 
                 const bpmDisplay = document.getElementById('bpmDisplay');
                 bpmDisplay.className = 'absolute bottom-4 left-4 bg-gray-900 bg-opacity-80 rounded-lg p-3 flex items-center gap-2';
@@ -349,8 +353,24 @@
                 }
             }
             
+            // ✅ METRIC VERIFICATION: Blink history from backend
+            if (data.blink_history && data.blink_history.length > 0) {
+                console.log(`📊 Blink History: ${data.blink_history.length} samples received`);
+            }
+            
+            // ✅ METRIC VERIFICATION: Emotion from backend
+            if (data.emotion) {
+                console.log(`📊 Emotion Detected: ${data.emotion}`);
+            }
+            
+            // ✅ METRIC VERIFICATION: Tells from backend
+            if (data.tells && Object.keys(data.tells).length > 0) {
+                console.log(`📊 Active Tells: ${JSON.stringify(data.tells)}`);
+            }
+            
             // Handle alerts (only in interrogation mode)
             if (data.alert && !isCalibrating) {
+                console.log(`🚨 ALERT RECEIVED: ${data.alert.indicators.join(', ')} (Confidence: ${(data.alert.confidence * 100).toFixed(0)}%)`);
                 addTell(`🚨 ALERT: ${data.alert.indicators.join(', ')} (${(data.alert.confidence * 100).toFixed(0)}%)`);
             }
         });

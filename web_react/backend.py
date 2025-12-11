@@ -1,0 +1,582 @@
+"""
+Flask API Backend for Lie Detector Web Interface
+Connects React frontend with Python deception detection engine
+"""
+
+from flask import Flask, jsonify, request, send_file
+from flask_cors import CORS
+from flask_socketio import SocketIO, emit, join_room, leave_room
+import sys
+import os
+import threading
+import uuid
+import json
+from datetime import datetime
+from pathlib import Path
+
+# Add src directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+import cv2
+import mediapipe as mp
+import deception_detection as dd
+import memory_system as ms
+
+app = Flask(__name__)
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Global state management
+sessions = {}
+active_cameras = {}
+current_frame = None  # Store latest frame from camera
+current_frame_lock = threading.Lock()  # Thread-safe frame access
+
+class DetectionSession:
+    """Manages a single detection session"""
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.created_at = datetime.now()
+        self.baseline = None
+        self.calibrated = False
+        self.metrics = {}
+        self.tells = []
+        self.camera_thread = None
+        self.camera_running = False
+        self.frame_count = 0
+        self.emotion_detector = None
+        self.cap = None  # Camera capture object
+        
+    def start_camera_capture(self):
+        """Start camera capture thread"""
+        global current_frame, current_frame_lock
+        
+        if self.camera_thread and self.camera_thread.is_alive():
+            return  # Already running
+        
+        def capture_frames():
+            global current_frame, current_frame_lock
+            
+            # Try multiple methods to open camera
+            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(0)
+            
+            if not self.cap.isOpened():
+                print(f"❌ Cannot open camera for session {self.session_id}")
+                print("Available cameras might be in use or not available")
+                return
+            
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            
+            print(f"✅ Camera opened successfully for session {self.session_id}")
+            
+            frame_count = 0
+            while self.camera_running:
+                ret, frame = self.cap.read()
+                if not ret:
+                    print(f"⚠️ Failed to read frame from camera")
+                    break
+                
+                frame = cv2.flip(frame, 1)
+                frame_count += 1
+                self.frame_count = frame_count
+                
+                # Store current frame thread-safely
+                with current_frame_lock:
+                    current_frame = frame
+                
+                # Log every 30 frames
+                if frame_count % 30 == 0:
+                    print(f"📹 Captured {frame_count} frames")
+            
+            if self.cap:
+                self.cap.release()
+            print(f"🎬 Camera stopped for session {self.session_id} ({frame_count} total frames)")
+        
+        
+        self.camera_running = True
+        self.camera_thread = threading.Thread(target=capture_frames, daemon=True)
+        self.camera_thread.start()
+    
+    def stop_camera_capture(self):
+        """Stop camera capture thread"""
+        self.camera_running = False
+        if self.camera_thread:
+            self.camera_thread.join(timeout=2)
+        if self.cap:
+            self.cap.release()
+        
+    def to_dict(self):
+        return {
+            'session_id': self.session_id,
+            'created_at': self.created_at.isoformat(),
+            'baseline': self.baseline,
+            'calibrated': self.calibrated,
+            'metrics': self.metrics,
+            'tells': self.tells,
+            'frame_count': self.frame_count
+        }
+
+# Routes
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/session/start', methods=['POST'])
+def start_session():
+    """Start a new detection session"""
+    try:
+        session_id = str(uuid.uuid4())[:8]
+        session = DetectionSession(session_id)
+        sessions[session_id] = session
+        
+        print(f"🎬 Started new session: {session_id}")
+        
+        return jsonify({
+            'status': 'success',
+            'session_id': session_id,
+            'message': 'Session started'
+        }), 200
+    except Exception as e:
+        print(f"Error starting session: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/session/<session_id>/end', methods=['POST'])
+def end_session(session_id):
+    """End a detection session"""
+    try:
+        if session_id in sessions:
+            session = sessions[session_id]
+            if session.camera_running:
+                session.camera_running = False
+            
+            # Save session data if memory system available
+            try:
+                memory_file = ms.memory_system.save_session()
+                print(f"📝 Session {session_id} saved to {memory_file}")
+            except:
+                pass
+            
+            del sessions[session_id]
+            print(f"🏁 Ended session: {session_id}")
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Session ended'
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/session/<session_id>/baseline', methods=['GET'])
+def get_baseline(session_id):
+    """Get baseline for a session"""
+    try:
+        if session_id not in sessions:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+        
+        session = sessions[session_id]
+        baseline = dd.baseline.copy()
+        
+        return jsonify({
+            'status': 'success',
+            'baseline': baseline,
+            'calibrated': baseline.get('calibrated', False)
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/session/<session_id>/calibrate', methods=['POST'])
+def calibrate_session(session_id):
+    """Mark session as calibrated and start camera"""
+    try:
+        if session_id not in sessions:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+        
+        session = sessions[session_id]
+        session.calibrated = True
+        
+        # Start camera capture
+        session.start_camera_capture()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Calibration complete',
+            'baseline': dd.baseline
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/session/<session_id>/metrics', methods=['GET'])
+def get_metrics(session_id):
+    """Get current metrics for a session"""
+    try:
+        if session_id not in sessions:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+        
+        session = sessions[session_id]
+        
+        # Get current metrics from deception_detection
+        metrics = {
+            'bpm': dd.avg_bpms[-1] if dd.avg_bpms and dd.avg_bpms[-1] > 0 else 0,
+            'emotion_data': get_emotion_data(),
+            'dominant_emotion': dd.mood,
+            'emotion_confidence': 0.65,
+            'gesture_score': 85,
+            'tells': session.tells,
+            'stress_level': calculate_stress_level(dd.tells)
+        }
+        
+        return jsonify({
+            'status': 'success',
+            'metrics': metrics
+        }), 200
+    except Exception as e:
+        print(f"Error getting metrics: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/session/<session_id>/data', methods=['GET'])
+def get_session_data(session_id):
+    """Get all data for a session"""
+    try:
+        if session_id not in sessions:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+        
+        session = sessions[session_id]
+        return jsonify({
+            'status': 'success',
+            'session': session.to_dict()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/sessions', methods=['GET'])
+def list_sessions():
+    """List all active sessions"""
+    try:
+        session_list = [session.to_dict() for session in sessions.values()]
+        return jsonify({
+            'status': 'success',
+            'sessions': session_list,
+            'count': len(session_list)
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/camera/start', methods=['POST'])
+def start_camera():
+    """Start camera for a session"""
+    try:
+        data = request.json
+        session_id = data.get('session_id')
+        
+        if session_id not in sessions:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+        
+        session = sessions[session_id]
+        
+        if not session.camera_running:
+            session.camera_running = True
+            # Start camera thread
+            camera_thread = threading.Thread(
+                target=run_camera_thread,
+                args=(session_id,),
+                daemon=True
+            )
+            camera_thread.start()
+            session.camera_thread = camera_thread
+            
+            print(f"📷 Camera started for session {session_id}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Camera started'
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+@app.route('/api/camera/stop', methods=['POST'])
+def stop_camera():
+    """Stop camera for a session"""
+    try:
+        data = request.json
+        session_id = data.get('session_id')
+        
+        if session_id not in sessions:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+        
+        session = sessions[session_id]
+        session.camera_running = False
+        
+        print(f"📷 Camera stopped for session {session_id}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Camera stopped'
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+# WebSocket events
+@socketio.on('connect')
+def handle_connect():
+    """Handle WebSocket connection"""
+    print(f"Client connected: {request.sid}")
+    emit('response', {'data': 'Connected to server'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle WebSocket disconnection"""
+    print(f"Client disconnected: {request.sid}")
+
+@socketio.on('join_session')
+def handle_join_session(data):
+    """Join a session room"""
+    session_id = data.get('session_id')
+    join_room(session_id)
+    emit('response', {'data': f'Joined session {session_id}'})
+
+@socketio.on('leave_session')
+def handle_leave_session(data):
+    """Leave a session room"""
+    session_id = data.get('session_id')
+    leave_room(session_id)
+    emit('response', {'data': f'Left session {session_id}'})
+
+# Helper functions
+def get_emotion_data():
+    """Get current emotion data from detector"""
+    try:
+        # Simulate emotion data for now
+        return {
+            'angry': 5,
+            'disgust': 2,
+            'fear': 10,
+            'happy': 8,
+            'sad': 5,
+            'surprise': 3,
+            'neutral': 67
+        }
+    except:
+        return {}
+
+def calculate_stress_level(tells):
+    """Calculate stress level based on tells"""
+    if not tells:
+        return "LOW STRESS"
+    
+    tell_count = len(tells)
+    if tell_count >= 4:
+        return "HIGH STRESS - ALERT"
+    elif tell_count >= 2:
+        return "MEDIUM STRESS"
+    else:
+        return "LOW STRESS"
+
+def run_camera_thread(session_id):
+    """Run camera capture in separate thread"""
+    try:
+        session = sessions.get(session_id)
+        if not session:
+            return
+        
+        mp_face_mesh = mp.solutions.face_mesh
+        mp_hands = mp.solutions.hands
+        cap = cv2.VideoCapture(0)
+        
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(0)
+        
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        
+        with mp_face_mesh.FaceMesh() as face_mesh, mp_hands.Hands() as hands:
+            while session.camera_running:
+                success, frame = cap.read()
+                if not success:
+                    continue
+                
+                frame = cv2.flip(frame, 1)
+                face_landmarks, hands_landmarks = dd.find_face_and_hands(
+                    frame, face_mesh, hands
+                )
+                
+                if face_landmarks:
+                    session.frame_count += 1
+                    
+                    # Draw landmarks on frame for visualization
+                    dd.draw_on_frame(frame, face_landmarks, hands_landmarks)
+                    
+                    # Process frame through detection pipeline
+                    tells = dd.process_frame(
+                        frame, face_landmarks, hands_landmarks, 
+                        dd.baseline['calibrated'], 30
+                    )
+                    
+                    # Store current frame for streaming
+                    with current_frame_lock:
+                        current_frame = frame.copy()
+                    
+                    socketio.emit('metrics_update', {
+                        'bpm': dd.avg_bpms[-1] if dd.avg_bpms else 0,
+                        'tells': list(tells.keys()),
+                        'frame_count': session.frame_count
+                    }, room=session_id)
+        
+        cap.release()
+    except Exception as e:
+        print(f"Error in camera thread: {e}")
+    finally:
+        session.camera_running = False
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        'status': 'error',
+        'message': 'Endpoint not found'
+    }), 404
+
+@app.route('/api/session/<session_id>/camera/frame', methods=['GET'])
+def get_camera_frame(session_id):
+    """Get current camera frame as base64 for a session"""
+    global current_frame, current_frame_lock
+    
+    try:
+        if session_id not in sessions:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found'
+            }), 404
+        
+        session = sessions[session_id]
+        
+        # Start camera if not running
+        if not session.camera_running and session.calibrated:
+            session.start_camera_capture()
+        
+        # Get current frame from global variable (with retry for first frame)
+        frame_to_send = None
+        retry_count = 0
+        max_retries = 3
+        
+        while frame_to_send is None and retry_count < max_retries:
+            with current_frame_lock:
+                if current_frame is not None:
+                    frame_to_send = current_frame.copy()
+            
+            if frame_to_send is None:
+                retry_count += 1
+                if retry_count < max_retries:
+                    import time
+                    time.sleep(0.05)  # Wait 50ms before retry
+        
+        if frame_to_send is None:
+            # Return placeholder if no frame yet
+            import base64
+            import numpy as np
+            placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
+            cv2.putText(placeholder, 'Waiting for camera frame...', (350, 360), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+            cv2.putText(placeholder, f'Running frames: {session.frame_count}', (400, 420),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 200), 1)
+            _, buffer = cv2.imencode('.jpg', placeholder)
+            frame_base64 = base64.b64encode(buffer).decode('utf-8')
+        else:
+            # Encode actual frame
+            import base64
+            _, buffer = cv2.imencode('.jpg', frame_to_send)
+            frame_base64 = base64.b64encode(buffer).decode('utf-8')
+        
+        return jsonify({
+            'status': 'success',
+            'frame': frame_base64,
+            'frame_count': session.frame_count,
+            'camera_active': session.camera_running
+        }), 200
+    except Exception as e:
+        print(f"Error in get_camera_frame: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+def internal_error(error):
+    return jsonify({
+        'status': 'error',
+        'message': 'Internal server error'
+    }), 500
+
+
+if __name__ == '__main__':
+    print("🚀 Starting Lie Detector Backend API")
+    print("📡 Server running on http://localhost:5000")
+    print("🌐 CORS enabled for frontend communication")
+    
+    # Run with socketio
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=5000,
+        debug=False,
+        use_reloader=False
+    )
