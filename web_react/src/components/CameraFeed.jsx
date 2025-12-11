@@ -62,92 +62,92 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       }
     };
 
-    const initializeMediaPipe = () => {
-      // Initialize FaceMesh
-      const faceMesh = new FaceMesh({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-        }
-      });
+    const initializeMediaPipe = async () => {
+      try {
+        console.log('🔧 Initializing MediaPipe models...');
+        
+        // Initialize FaceMesh
+        const faceMesh = new FaceMesh({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+          }
+        });
 
-      faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
 
-      faceMesh.onResults((results) => {
-        resultsRef.current.face = results;
-        // Mark model as ready on first results
-        if (!modelsReady.current.faceMesh) {
-          console.log('✅ FaceMesh ready');
-          modelsReady.current.faceMesh = true;
-        }
-        // Debug: Log when face detected
-        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-          console.log('Face detected:', results.multiFaceLandmarks.length);
-        }
-        // Drawing handled by animation loop
-      });
-      faceMeshRef.current = faceMesh;
+        faceMesh.onResults((results) => {
+          resultsRef.current.face = results;
+          // Mark model as ready on first results
+          if (!modelsReady.current.faceMesh) {
+            console.log('✅ FaceMesh ready');
+            modelsReady.current.faceMesh = true;
+          }
+        });
+        faceMeshRef.current = faceMesh;
 
-      // Initialize Hands
-      const hands = new Hands({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }
-      });
+        // Initialize Hands
+        const hands = new Hands({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+          }
+        });
 
-      hands.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+        hands.setOptions({
+          maxNumHands: 2,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
 
-      hands.onResults((results) => {
-        resultsRef.current.hands = results;
-        // Mark model as ready on first results
-        if (!modelsReady.current.hands) {
-          console.log('✅ Hands ready');
-          modelsReady.current.hands = true;
-        }
-        // Debug: Log when hands detected
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-          console.log('Hands detected:', results.multiHandLandmarks.length);
-        }
-        // Drawing handled by animation loop
-      });
-      handsRef.current = hands;
+        hands.onResults((results) => {
+          resultsRef.current.hands = results;
+          // Mark model as ready on first results
+          if (!modelsReady.current.hands) {
+            console.log('✅ Hands ready');
+            modelsReady.current.hands = true;
+          }
+        });
+        handsRef.current = hands;
 
-      // Start camera processing with delay to allow models to initialize
-      if (videoRef.current) {
-        const camera = new Camera(videoRef.current, {
-          onFrame: async () => {
-            // Send frames to models (they will mark themselves ready on first results)
-            if (faceMeshRef.current && handsRef.current && videoRef.current) {
-              try {
-                await faceMeshRef.current.send({ image: videoRef.current });
-                await handsRef.current.send({ image: videoRef.current });
-              } catch (err) {
-                // Silently handle errors during initialization
-                if (!err.message?.includes('abort')) {
+        // Wait for models to fully initialize before starting camera
+        console.log('⏳ Waiting for MediaPipe WASM modules to load...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Start camera processing
+        if (videoRef.current) {
+          const camera = new Camera(videoRef.current, {
+            onFrame: async () => {
+              // Only send frames after models are initialized
+              if (faceMeshRef.current && handsRef.current && videoRef.current) {
+                try {
+                  await faceMeshRef.current.send({ image: videoRef.current });
+                  await handsRef.current.send({ image: videoRef.current });
+                } catch (err) {
+                  // Silently handle initialization errors
+                  if (!modelsReady.current.faceMesh || !modelsReady.current.hands) {
+                    // Still initializing, suppress errors
+                    return;
+                  }
                   console.error('Frame processing error:', err);
                 }
               }
-            }
-          },
-          width: 1280,
-          height: 720
-        });
-        
-        // Delay camera start to give models time to load WASM
-        setTimeout(() => {
+            },
+            width: 1280,
+            height: 720
+          });
+          
           console.log('🎥 Starting MediaPipe camera feed...');
           camera.start();
           cameraRef.current = camera;
-        }, 1000);
+        }
+      } catch (err) {
+        console.error('MediaPipe initialization error:', err);
+        setError('Failed to initialize MediaPipe. Please refresh the page.');
       }
     };
 

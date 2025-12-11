@@ -422,8 +422,21 @@ def calculate_stress_level(tells):
         return "LOW STRESS"
     
     tell_count = len(tells)
+    
+    # Check for HIGH STRESS and trigger alert
     if tell_count >= 4:
-        return "HIGH STRESS - ALERT"
+        stress = "HIGH STRESS - ALERT"
+        # Emit alert to frontend
+        try:
+            socketio.emit('high_stress_alert', {
+                'message': 'HIGH STRESS DETECTED',
+                'confidence': 0.8,
+                'indicators': list(tells.keys()),
+                'tell_count': tell_count
+            }, broadcast=True)
+        except Exception as e:
+            print(f"Error emitting alert: {e}")
+        return stress
     elif tell_count >= 2:
         return "MEDIUM STRESS"
     else:
