@@ -511,34 +511,35 @@ export default function LieDetectorApp() {
             
             {cameraActive && baseline.calibrated && (
               <>
-                {/* Heart Rate Display */}
-                <div className={`bg-gray-900 bg-opacity-80 rounded-lg p-3 flex items-center gap-2 ${getBpmColor()}`}>
-                  <Heart className="w-5 h-5" />
-                  <span className="text-xl font-bold">{bpm.toFixed(1)} BPM</span>
-                  {baseline.calibrated && (
-                    <span className="text-xs">
-                      ({((bpm - baseline.bpm) / baseline.bpm * 100).toFixed(0)}%)
-                    </span>
-                  )}
-                </div>
+                {/* Heart Rate Display with Graph */}
+                <div className="flex gap-3 items-center">
+                  {/* Current BPM */}
+                  <div className={`bg-gray-900 bg-opacity-80 rounded-lg p-3 flex items-center gap-2 ${getBpmColor()}`}>
+                    <Heart className="w-5 h-5" />
+                    <span className="text-xl font-bold">{bpm.toFixed(1)} BPM</span>
+                    {baseline.calibrated && (
+                      <span className="text-xs">
+                        ({((bpm - baseline.bpm) / baseline.bpm * 100).toFixed(0)}%)
+                      </span>
+                    )}
+                  </div>
 
-                {/* Mini Graph */}
-                <div className="bg-gray-900 bg-opacity-80 rounded-lg p-2">
-                  <svg width="200" height="50">
-                    <polyline
-                      fill="none"
-                      stroke="#10b981"
-                      strokeWidth="2"
-                      points={Array.from({ length: 50 }, (_, i) => {
-                        const x = i * 4;
-                        const y = 25 + Math.sin(i * 0.3 + Date.now() * 0.01) * 15;
-                        return `${x},${y}`;
-                      }).join(' ')}
-                    />
-                  </svg>
-                </div>
-              </>
-            )}
+                  {/* Mini Graph */}
+                  <div className="bg-gray-900 bg-opacity-80 rounded-lg p-2">
+                    <svg width="200" height="50">
+                      <polyline
+                        fill="none"
+                        stroke="#10b981"
+                        strokeWidth="2"
+                        points={Array.from({ length: 50 }, (_, i) => {
+                          const x = i * 4;
+                          const y = 25 + Math.sin(i * 0.3 + Date.now() * 0.01) * 15;
+                          return `${x},${y}`;
+                        }).join(' ')}
+                      />
+                    </svg>
+                  </div>                </div>
+              </>            )}
 
             {/* Status Bar & Detection Tells */}
             <div className="space-y-2">
