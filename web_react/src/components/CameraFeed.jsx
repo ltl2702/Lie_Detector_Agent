@@ -13,7 +13,7 @@ import {
 import { HAND_CONNECTIONS } from "@mediapipe/hands";
 
 // Constants for detection
-const EYE_BLINK_THRESHOLD = 0.3; // Eye Aspect Ratio threshold
+const EYE_BLINK_THRESHOLD = 0.4; // Eye Aspect Ratio threshold
 const MAX_FRAMES = 120; // 4 seconds at 30fps
 const HAND_FACE_DISTANCE_THRESHOLD = 0.05;
 
@@ -27,6 +27,15 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const cameraRef = useRef(null);
   const resultsRef = useRef({ face: null, hands: null });
   const modelsReady = useRef({ faceMesh: false, hands: false });
+  // THÊM CÁC REF ĐỂ THEO DÕI TRẠNG THÁI CŨ (để phát hiện thay đổi)
+  const prevBlinkState = useRef(false);
+  const prevHandState = useRef(false);
+
+  // Ref để đếm tổng số lần (Count) thay vì Buffer frame
+  const totalBlinks = useRef(0);
+  const totalHandTouches = useRef(0);
+  // Ref để chứa danh sách thời điểm chớp mắt (dùng cho Sliding Window)
+  const blinkTimestamps = useRef([]);
 
   // Metrics tracking
   const blinksBuffer = useRef([]);
@@ -227,20 +236,43 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     };
 
     // Helper: Calculate eye aspect ratio
+    // const getEyeAspectRatio = (landmarks, eyePoints) => {
+    //   const vertical1 = Math.hypot(
+    //     landmarks[eyePoints[1]].x - landmarks[eyePoints[3]].x,
+    //     landmarks[eyePoints[1]].y - landmarks[eyePoints[3]].y
+    //   );
+    //   const vertical2 = Math.hypot(
+    //     landmarks[eyePoints[2]].x - landmarks[eyePoints[0]].x,
+    //     landmarks[eyePoints[2]].y - landmarks[eyePoints[0]].y
+    //   );
+    //   const horizontal = Math.hypot(
+    //     landmarks[eyePoints[0]].x - landmarks[eyePoints[3]].x,
+    //     landmarks[eyePoints[0]].y - landmarks[eyePoints[3]].y
+    //   );
+    //   return (vertical1 + vertical2) / (2.0 * horizontal);
+    // };
+
+    // Thay thế hàm cũ bằng hàm này
     const getEyeAspectRatio = (landmarks, eyePoints) => {
-      const vertical1 = Math.hypot(
-        landmarks[eyePoints[1]].x - landmarks[eyePoints[3]].x,
-        landmarks[eyePoints[1]].y - landmarks[eyePoints[3]].y
-      );
-      const vertical2 = Math.hypot(
-        landmarks[eyePoints[2]].x - landmarks[eyePoints[0]].x,
-        landmarks[eyePoints[2]].y - landmarks[eyePoints[0]].y
-      );
-      const horizontal = Math.hypot(
-        landmarks[eyePoints[0]].x - landmarks[eyePoints[3]].x,
-        landmarks[eyePoints[0]].y - landmarks[eyePoints[3]].y
-      );
-      return (vertical1 + vertical2) / (2.0 * horizontal);
+      // eyePoints thứ tự: [Top, Bottom, Inner, Outer]
+      // Right eye: [159, 145, 133, 33]
+      // Left eye: [386, 374, 362, 263]
+
+      const top = landmarks[eyePoints[0]];
+      const bottom = landmarks[eyePoints[1]];
+      const inner = landmarks[eyePoints[2]];
+      const outer = landmarks[eyePoints[3]];
+
+      // Tính chiều cao mắt (Khoảng cách giữa mí trên và mí dưới)
+      const vertical = Math.hypot(top.x - bottom.x, top.y - bottom.y);
+
+      // Tính chiều rộng mắt (Khoảng cách giữa khóe mắt trong và ngoài)
+      const horizontal = Math.hypot(inner.x - outer.x, inner.y - outer.y);
+
+      // Tránh chia cho 0
+      if (horizontal === 0) return 0;
+
+      return vertical / horizontal;
     };
 
     // Helper: Check if blinking
@@ -292,10 +324,13 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     const calculateMetrics = () => {
       frameCountRef.current++;
 
-      let blink = false;
+      // let blink = false;
       let handToFace = false;
       let lipCompression = false;
       let gazeShift = 0;
+      let isBlinkingNow = false;
+      let isTouchingFaceNow = false;
+      let currentEAR = 0; // Eye Aspect Ratio
 
       // Blink detection
       if (
@@ -303,14 +338,22 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         resultsRef.current.face.multiFaceLandmarks
       ) {
         const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
-        blink = isBlinking(landmarks);
-        // 2. Lip Compression Detection
+        // blink = isBlinking(landmarks);
+        // Tính EAR chi tiết để Debug
+        const rightEAR = getEyeAspectRatio(landmarks, [159, 145, 133, 33]);
+        const leftEAR = getEyeAspectRatio(landmarks, [386, 374, 362, 263]);
+        currentEAR = (rightEAR + leftEAR) / 2;
+
+        // So sánh với ngưỡng
+        if (currentEAR < EYE_BLINK_THRESHOLD) {
+          isBlinkingNow = true;
+        }
+        // Lip Compression Detection
         // Ngưỡng 0.35
         const lipRatio = calculateLipRatio(landmarks);
         if (lipRatio < 0.35) {
           lipCompression = true;
         }
-
         // Gaze Shift Detection
         gazeShift = calculateGazeShift(landmarks);
       }
@@ -327,39 +370,88 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           resultsRef.current.hands.multiHandLandmarks,
           faceLandmarks
         );
+        isTouchingFaceNow = checkHandToFace(
+          resultsRef.current.hands.multiHandLandmarks,
+          faceLandmarks
+        );
       }
 
-      // Update buffers
-      blinksBuffer.current.push(blink);
-      handToFaceBuffer.current.push(handToFace);
+      const now = Date.now();
+      // CẬP NHẬT TỔNG SỐ LẦN (COUNT) THAY VÌ BUFFER FRAME
+      // Cập nhật tổng số lần nháy mắt
+      if (isBlinkingNow && !prevBlinkState.current) {
+        totalBlinks.current += 1;
+        console.log("👁️ BLINK DETECTED! Total:", totalBlinks.current);
+        // Lưu thời điểm chớp mắt vào mảng
+        blinkTimestamps.current.push(now);
+      }
+      prevBlinkState.current = isBlinkingNow;
+      // Lọc bỏ các lần chớp mắt đã quá 60 giây (60000ms)
+      // Để tính rate chính xác trong 1 phút gần nhất
+      blinkTimestamps.current = blinkTimestamps.current.filter(
+        (t) => now - t <= 60000
+      );
+      // Tính Rate hiện tại
+      let currentBlinkRate = blinkTimestamps.current.length;
+      const timeElapsedSeconds = frameCountRef.current / 30; // Giả sử 30fps
+      if (timeElapsedSeconds < 60 && timeElapsedSeconds > 5) {
+        currentBlinkRate = Math.round(
+          (currentBlinkRate / timeElapsedSeconds) * 60
+        );
+      }
+      // Cập nhật tổng số lần chạm tay lên mặt
+      if (isTouchingFaceNow && !prevHandState.current) {
+        totalHandTouches.current += 1;
+      }
 
-      // Keep buffer size limited
-      if (blinksBuffer.current.length > MAX_FRAMES) {
-        blinksBuffer.current.shift();
-      }
-      if (handToFaceBuffer.current.length > MAX_FRAMES) {
-        handToFaceBuffer.current.shift();
-      }
+      // // Update buffers
+      // blinksBuffer.current.push(blink);
+      // handToFaceBuffer.current.push(handToFace);
+
+      // // Keep buffer size limited
+      // if (blinksBuffer.current.length > MAX_FRAMES) {
+      //   blinksBuffer.current.shift();
+      // }
+      // if (handToFaceBuffer.current.length > MAX_FRAMES) {
+      //   handToFaceBuffer.current.shift();
+      // }
 
       // Calculate and emit metrics every 30 frames (1 second at 30fps)
       if (frameCountRef.current % 30 === 0 && onMetricsUpdate) {
-        const blinkCount = blinksBuffer.current.filter((b) => b).length;
-        const handToFaceCount = handToFaceBuffer.current.filter(
-          (h) => h
-        ).length;
+        console.log(
+          `Debug Metrics - EAR: ${currentEAR.toFixed(
+            3
+          )} (Threshold: ${EYE_BLINK_THRESHOLD})
+          }`
+        );
+        // const blinkCount = blinksBuffer.current.filter((b) => b).length;
+        // const handToFaceCount = handToFaceBuffer.current.filter(
+        //   (h) => h
+        // ).length;
 
         // Calculate per minute rates
         const secondsRecorded = blinksBuffer.current.length / 30;
-        const blinkRate =
-          secondsRecorded > 0 ? (blinkCount / secondsRecorded) * 60 : 0;
-        const handToFaceFreq =
-          secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
+        // Tính phút đã trôi qua để tính tốc độ chớp mắt trung bình
+        const minutesElapsed = frameCountRef.current / 30 / 60;
+
+        // Blink Rate = Tổng số lần chớp / số phút (tránh chia cho 0)
+        const calculatedBlinkRate =
+          minutesElapsed > 0.1
+            ? Math.round(totalBlinks.current / minutesElapsed)
+            : 0;
+
+        // const blinkRate = secondsRecorded > 0 ? (blinkCount / secondsRecorded) * 60 : 0;
+        // const handToFaceFreq = secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
 
         onMetricsUpdate({
-          blinkRate: Math.round(blinkRate),
-          handToFaceFrequency: Math.round(handToFaceFreq * 10) / 10,
-          currentBlink: blink,
-          currentHandToFace: handToFace,
+          blinkRate: currentBlinkRate, // Tốc độ trung bình (lần/phút)
+          // blinkCount: totalBlinks.current, // Tổng số lần chớp từ đầu buổi
+          // handToFaceFrequency: Math.round(handToFaceFreq * 10) / 10,
+          // currentBlink: blink,
+          currentBlink: isBlinkingNow,
+          // currentHandToFace: handToFace,
+          currentHandToFace: isTouchingFaceNow,
+          handToFaceCount: totalHandTouches.current, // Tổng số lần chạm tay lên mặt
           isLipCompressed: lipCompression, // True/False
           gazeShiftIntensity: gazeShift, // Float (độ lớn của việc đảo mắt)
           frameCount: frameCountRef.current,

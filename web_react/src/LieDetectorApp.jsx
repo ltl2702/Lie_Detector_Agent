@@ -40,9 +40,15 @@ export default function LieDetectorApp() {
 
   // Real-time metrics
   const [bpm, setBpm] = useState(0);
-  const [blinkRate, setBlinkRate] = useState([
-    45, 62, 78, 85, 72, 58, 45, 38, 42, 55,
-  ]);
+  // const [blinkRate, setBlinkRate] = useState([
+  //   45, 62, 78, 85, 72, 58, 45, 38, 42, 55,
+  // ]);
+  const [blinkMetrics, setBlinkMetrics] = useState({ rate: 0, count: 0 });
+  const [handMetrics, setHandMetrics] = useState({
+    count: 0,
+    isTouching: false,
+  });
+
   const [emotionData, setEmotionData] = useState({
     angry: 0,
     disgust: 0,
@@ -218,27 +224,67 @@ export default function LieDetectorApp() {
     console.log("Frontend metrics:", metrics);
 
     // Update blink rate display
-    if (metrics.blinkRate !== undefined) {
-      setBlinkRate((prev) => {
-        const newData = [...prev.slice(1), metrics.blinkRate];
-        return newData;
-      });
-    }
+    // if (metrics.blinkRate !== undefined) {
+    //   setBlinkRate((prev) => {
+    //     const newData = [...prev.slice(1), metrics.blinkRate];
+    //     return newData;
+    //   });
+    // }
+    setBlinkMetrics({
+      rate: metrics.blinkRate,
+      count: metrics.blinkCount,
+    });
+
+    setHandMetrics({
+      count: metrics.handTouchCount,
+      isTouching: metrics.currentHandToFace,
+    });
 
     // Check for tells based on baseline
     if (baseline.calibrated) {
       // Increased blinking (>150% of baseline)
-      if (metrics.blinkRate > baseline.blink_rate * 1.5) {
-        addTell("Increased blinking detected", "blink");
-      }
+      // if (metrics.blinkRate > baseline.blink_rate * 1.5) {
+      //   addTell("Increased blinking detected", "blink");
+      // }
 
       // Decreased blinking (<50% of baseline)
-      if (
-        metrics.blinkRate < baseline.blink_rate * 0.5 &&
-        metrics.blinkRate > 0
-      ) {
-        addTell("Decreased blinking detected", "blink");
+      // if (metrics.blinkRate < baseline.blink_rate * 0.5 && metrics.blinkRate > 0) {
+      //   addTell("Decreased blinking detected", "blink");
+      // }
+
+      const normalRateMin = 10; // Ngưỡng chớp mắt dưới bình thường
+      const normalRateMax = 30; // Ngưỡng trên bình thường (cho phép dao động)
+      // 1. Cảnh báo Blink Rate CAO (Nervous / Stress)
+      // Ngưỡng: > 150% baseline hoặc > 35 lần/phút tuyệt đối
+      const highBlinkThreshold = Math.max(35, baseline.blink_rate * 1.5);
+
+      if (metrics.blinkRate > highBlinkThreshold) {
+        addTell(
+          `Rapid Blinking: ${metrics.blinkRate}/min (Nervousness)`,
+          "blink_high"
+        );
       }
+      // 2. Cảnh báo Blink Rate THẤP (Cognitive Load / Staring)
+      // Ngưỡng: < 50% baseline hoặc < 8 lần/phút tuyệt đối (chỉ tính khi đã chạy > 15s)
+      const lowBlinkThreshold = Math.max(5, baseline.blink_rate * 0.5);
+
+      // Chỉ cảnh báo thấp nếu đã có đủ dữ liệu (tổng blink > 2 hoặc blinkRate > 0 để tránh lúc mới bật camera)
+      if (
+        metrics.blinkRate < 8 &&
+        metrics.blinkRate < lowBlinkThreshold &&
+        metrics.frameCount > 450
+      ) {
+        // frameCount > 450 tức là đã chạy khoảng 15 giây
+        addTell(
+          `Unusual Staring: ${metrics.blinkRate}/min (Cognitive Load)`,
+          "blink_low"
+        );
+      }
+
+      // Cảnh báo nếu chớp mắt quá nhiều (ví dụ > 40 lần/phút)
+      // if (metrics.blinkRate > 40) {
+      //   addTell(`High blink rate: ${metrics.blinkRate}/min`, "blink");
+      // }
 
       // Hand-to-face contact
       if (metrics.currentHandToFace) {
@@ -359,24 +405,24 @@ export default function LieDetectorApp() {
         });
 
         // Update blink rate
-        setBlinkRate((prev) => {
-          const newRate = [
-            ...prev.slice(1),
-            Math.floor(Math.random() * 60 + 30),
-          ];
+        // setBlinkRate((prev) => {
+        //   const newRate = [
+        //     ...prev.slice(1),
+        //     Math.floor(Math.random() * 60 + 30),
+        //   ];
 
-          // Check for abnormal blinking
-          const recentAvg = newRate.slice(-5).reduce((a, b) => a + b) / 5;
-          if (Math.random() > 0.85) {
-            if (recentAvg > 70) {
-              addTell("Increased blinking detected", "blink");
-            } else if (recentAvg < 30) {
-              addTell("Decreased blinking detected", "blink");
-            }
-          }
+        //   // Check for abnormal blinking
+        //   const recentAvg = newRate.slice(-5).reduce((a, b) => a + b) / 5;
+        //   if (Math.random() > 0.85) {
+        //     if (recentAvg > 70) {
+        //       addTell("Increased blinking detected", "blink");
+        //     } else if (recentAvg < 30) {
+        //       addTell("Decreased blinking detected", "blink");
+        //     }
+        //   }
 
-          return newRate;
-        });
+        //   return newRate;
+        // });
 
         // Update emotion data
         setEmotionData((prev) => {
@@ -861,25 +907,118 @@ export default function LieDetectorApp() {
             <div className="col-span-3 space-y-4">
               {/* Blink Pattern */}
               <div className="bg-gray-800 rounded-lg p-5">
-                <h3 className="text-lg font-bold mb-4">Blink Pattern</h3>
-                <div className="h-32 flex items-end gap-1.5">
-                  {blinkRate.map((rate, i) => (
-                    <div
-                      key={i}
-                      className="flex-1 bg-blue-500 rounded-t transition-all duration-300"
-                      style={{ height: `${rate}%` }}
-                    ></div>
-                  ))}
-                </div>
-                {baseline.calibrated && (
-                  <div className="mt-3 text-sm text-gray-400 font-medium">
-                    Baseline: {baseline.blink_rate.toFixed(1)}/min
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  <Eye className="w-5 h-5 text-blue-400" />
+                  Blink Analysis
+                </h3>
+
+                <div className="space-y-4">
+                  {/* Hàng 1: Baseline & Current */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Cột Baseline (Chỉ hiện khi đã Calibrate) */}
+                    <div className="bg-gray-700/50 rounded p-3 text-center border border-gray-600">
+                      <div className="text-sm text-gray-400 mb-1">Baseline</div>
+                      <div className="text-xl font-bold text-gray-300">
+                        {baseline.calibrated
+                          ? baseline.blink_rate.toFixed(0)
+                          : "--"}
+                      </div>
+                      <div className="text-xs text-gray-500">blinks/min</div>
+                    </div>
+
+                    {/* Cột Current Rate */}
+                    <div className="bg-gray-700 rounded p-3 text-center border border-blue-500/30">
+                      <div className="text-sm text-gray-400 mb-1">
+                        Current Rate
+                      </div>
+                      <div
+                        className={`text-2xl font-bold ${
+                          // Đổi màu dựa trên logic nói dối
+                          !baseline.calibrated
+                            ? "text-white"
+                            : blinkMetrics.rate > baseline.blink_rate * 1.5
+                            ? "text-red-500" // Nhanh bất thường
+                            : blinkMetrics.rate < baseline.blink_rate * 0.5 &&
+                              blinkMetrics.rate < 10
+                            ? "text-yellow-400" // Chậm bất thường
+                            : "text-green-400"
+                        }`}
+                      >
+                        {blinkMetrics.rate}
+                      </div>
+                      <div className="text-xs text-gray-500">blinks/min</div>
+                    </div>
                   </div>
-                )}
+
+                  {/* Hàng 2: Deviation (Sự thay đổi) */}
+                  {baseline.calibrated && (
+                    <div className="bg-gray-900/50 rounded-lg p-3">
+                      <div className="flex justify-between items-center text-sm mb-2">
+                        <span className="text-gray-400">
+                          Deviation vs Baseline
+                        </span>
+                        {(() => {
+                          const diff = blinkMetrics.rate - baseline.blink_rate;
+                          const percent =
+                            baseline.blink_rate > 0
+                              ? (diff / baseline.blink_rate) * 100
+                              : 0;
+                          const isHigh = percent > 50; // Cao hơn 50%
+                          const isLow = percent < -50; // Thấp hơn 50%
+
+                          return (
+                            <span
+                              className={`font-bold ${
+                                isHigh
+                                  ? "text-red-400"
+                                  : isLow
+                                  ? "text-yellow-400"
+                                  : "text-green-400"
+                              }`}
+                            >
+                              {diff > 0 ? "+" : ""}
+                              {percent.toFixed(0)}%
+                            </span>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Progress Bar visualizing deviation */}
+                      <div className="relative h-2 bg-gray-700 rounded-full overflow-hidden">
+                        {/* Center marker */}
+                        <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/30 z-10"></div>
+
+                        {/* Bar */}
+                        {(() => {
+                          const diff = blinkMetrics.rate - baseline.blink_rate;
+                          // Max range visual là +/- 20 nhịp
+                          const clampedDiff = Math.max(-20, Math.min(20, diff));
+                          const widthPercent =
+                            (Math.abs(clampedDiff) / 20) * 50; // 0 -> 50% width
+
+                          return (
+                            <div
+                              className={`absolute top-0 bottom-0 transition-all duration-500 ${
+                                diff > 0
+                                  ? "left-1/2 bg-red-500"
+                                  : "right-1/2 bg-yellow-500"
+                              }`}
+                              style={{ width: `${widthPercent}%` }}
+                            />
+                          );
+                        })()}
+                      </div>
+                      <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                        <span>Low (Focus/Lying)</span>
+                        <span>High (Stress)</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Hand-to-Face Gesture */}
-              <div className="bg-gray-800 rounded-lg p-5">
+              {/* <div className="bg-gray-800 rounded-lg p-5">
                 <h3 className="text-lg font-bold mb-4">Hand-to-Face Contact</h3>
                 <div className="flex items-center justify-center">
                   <div className="relative w-40 h-40">
@@ -915,6 +1054,41 @@ export default function LieDetectorApp() {
                   <div className="mt-3 text-sm text-gray-400 text-center font-medium">
                     Baseline frequency:{" "}
                     {(baseline.hand_face_frequency * 100).toFixed(1)}%
+                  </div>
+                )}
+              </div> */}
+              <div className="bg-gray-800 rounded-lg p-5">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  <Hand
+                    className={`w-5 h-5 ${
+                      handMetrics.isTouching
+                        ? "text-red-500 animate-pulse"
+                        : "text-green-400"
+                    }`}
+                  />
+                  Hand-to-Face
+                </h3>
+
+                {/* Cảnh báo to nếu đang chạm */}
+                {handMetrics.isTouching && (
+                  <div className="mb-4 bg-red-900/50 border border-red-500 text-red-200 px-3 py-2 rounded text-center animate-pulse font-bold">
+                    ⚠️ TOUCHING FACE
+                  </div>
+                )}
+
+                <div className="bg-gray-700 rounded p-4 text-center">
+                  <div className="text-4xl font-bold text-white">
+                    {handMetrics.count}
+                  </div>
+                  <div className="text-sm text-gray-400 uppercase tracking-wider mt-1">
+                    Total Contacts
+                  </div>
+                </div>
+
+                {baseline.calibrated && (
+                  <div className="mt-3 text-xs text-gray-500 text-center">
+                    Calibration baseline:{" "}
+                    {(baseline.hand_face_frequency * 100).toFixed(1)}% activity
                   </div>
                 )}
               </div>
