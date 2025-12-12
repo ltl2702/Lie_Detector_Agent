@@ -348,6 +348,99 @@ export default function ReviewMode({ sessionData, onClose }) {
                 </div>
               </div>
             </div>
+
+            {/* AI Analysis */}
+            {sessionData?.ai_analysis && (
+              <div className="mt-6 pt-4 border-t border-gray-700">
+                <h3 className="text-sm font-semibold mb-3 text-gray-400 flex items-center gap-2">
+                  🤖 AI Analysis
+                </h3>
+                
+                {/* Suspicion Level */}
+                <div className="mb-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-400">Mức độ khả nghi:</span>
+                    <span className={`text-xs font-bold px-2 py-1 rounded ${
+                      sessionData.ai_analysis.suspicion_level === 'HIGH' ? 'bg-red-900 text-red-400' :
+                      sessionData.ai_analysis.suspicion_level === 'MEDIUM' ? 'bg-yellow-900 text-yellow-400' :
+                      'bg-green-900 text-green-400'
+                    }`}>
+                      {sessionData.ai_analysis.suspicion_level}
+                      {sessionData.ai_analysis.suspicion_score && ` (${sessionData.ai_analysis.suspicion_score}%)`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Summary */}
+                <div className="mb-3 p-2 bg-gray-700 rounded text-xs text-gray-300">
+                  <strong className="text-white">Tóm tắt:</strong><br/>
+                  {sessionData.ai_analysis.summary}
+                </div>
+
+                {/* Recommendation */}
+                <div className="mb-3 p-2 bg-blue-900 bg-opacity-20 border border-blue-700 rounded text-xs">
+                  <strong className="text-blue-400">Khuyến nghị:</strong><br/>
+                  <span className="text-gray-300">{sessionData.ai_analysis.recommendation}</span>
+                </div>
+
+                {/* Reasoning */}
+                <div className="mb-3 p-2 bg-gray-700 rounded text-xs text-gray-300">
+                  <strong className="text-white">Lý do:</strong><br/>
+                  {sessionData.ai_analysis.reasoning}
+                </div>
+
+                {/* Key Indicators */}
+                {sessionData.ai_analysis.key_indicators && sessionData.ai_analysis.key_indicators.length > 0 && (
+                  <div className="mb-3">
+                    <strong className="text-xs text-white">Dấu hiệu quan trọng:</strong>
+                    <ul className="mt-1 space-y-2 text-xs text-gray-300">
+                      {sessionData.ai_analysis.key_indicators.map((indicator, idx) => {
+                        // Handle both string and object formats
+                        if (typeof indicator === 'string') {
+                          return (
+                            <li key={idx} className="flex items-start gap-1">
+                              <span className="text-blue-400">•</span>
+                              <span>{indicator}</span>
+                            </li>
+                          );
+                        } else if (typeof indicator === 'object') {
+                          return (
+                            <li key={idx} className="flex flex-col gap-1">
+                              <div className="flex items-start gap-1">
+                                <span className="text-blue-400">•</span>
+                                <span className="font-semibold text-white">{indicator.indicator || 'Dấu hiệu'}</span>
+                              </div>
+                              {indicator.interpretation && (
+                                <span className="ml-3 text-gray-400">{indicator.interpretation}</span>
+                              )}
+                              {indicator.anomaly_note && (
+                                <span className="ml-3 text-yellow-400">⚠️ {indicator.anomaly_note}</span>
+                              )}
+                            </li>
+                          );
+                        }
+                        return null;
+                      })}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Suggested Questions */}
+                {sessionData.ai_analysis.suggested_questions && sessionData.ai_analysis.suggested_questions.length > 0 && (
+                  <div>
+                    <strong className="text-xs text-white">Câu hỏi nên hỏi thêm:</strong>
+                    <ul className="mt-1 space-y-1 text-xs text-gray-300">
+                      {sessionData.ai_analysis.suggested_questions.map((question, idx) => (
+                        <li key={idx} className="flex items-start gap-1">
+                          <span className="text-yellow-400">?</span>
+                          <span>{question}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

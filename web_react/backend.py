@@ -13,6 +13,7 @@ import threading
 import uuid
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +24,27 @@ import cv2
 import mediapipe as mp
 import deception_detection as dd
 import memory_system as ms
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
+# Import Gemini AI for session analysis
+try:
+    import google.generativeai as genai
+    # Configure with API key (set GEMINI_API_KEY in environment or .env file)
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_AVAILABLE = True
+        print("✅ Gemini AI configured for session analysis")
+    else:
+        GEMINI_AVAILABLE = False
+        print("⚠️ GEMINI_API_KEY not found. AI analysis will be disabled.")
+        print("   Please create .env file with: GEMINI_API_KEY=your_key_here")
+except ImportError:
+    GEMINI_AVAILABLE = False
+    print("⚠️ google-generativeai not installed. Run: pip install google-generativeai")
 
 app = Flask(__name__)
 CORS(app)
@@ -52,23 +74,33 @@ class DetectionSession:
         self.video_filename = None  # Output video filename
         self.recording = False  # Recording status
         
-        # Initialize MediaPipe for landmarks
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.mp_hands = mp.solutions.hands
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
-        
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        self.hands = self.mp_hands.Hands(
-            max_num_hands=2,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
+        # Store MediaPipe references (lazy initialization)
+        self.mp_face_mesh = None
+        self.mp_hands = None
+        self.mp_drawing = None
+        self.mp_drawing_styles = None
+        self.face_mesh = None
+        self.hands = None
+    
+    def _init_mediapipe(self):
+        """Initialize MediaPipe components (lazy initialization)"""
+        if self.mp_face_mesh is None:
+            self.mp_face_mesh = mp.solutions.face_mesh
+            self.mp_hands = mp.solutions.hands
+            self.mp_drawing = mp.solutions.drawing_utils
+            self.mp_drawing_styles = mp.solutions.drawing_styles
+            
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            self.hands = self.mp_hands.Hands(
+                max_num_hands=2,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
         
     def start_camera_capture(self):
         """Start camera capture thread"""
@@ -76,6 +108,9 @@ class DetectionSession:
         
         if self.camera_thread and self.camera_thread.is_alive():
             return  # Already running
+        
+        # Initialize MediaPipe before starting camera
+        self._init_mediapipe()
         
         def capture_frames():
             global current_frame, current_frame_lock
@@ -380,6 +415,11 @@ def end_session(session_id):
                 'video_file': video_filename
             }
             
+            # Generate AI analysis
+            print(f"🤖 Generating AI analysis for session {session_id}...")
+            ai_analysis = analyze_session_with_ai(session_data)
+            session_data['ai_analysis'] = ai_analysis
+            
             # Save to sessions directory
             sessions_dir = Path(__file__).parent.parent / 'sessions'
             sessions_dir.mkdir(exist_ok=True)
@@ -402,7 +442,8 @@ def end_session(session_id):
                 'status': 'success',
                 'message': 'Session ended and saved',
                 'session_file': str(session_filename),
-                'video_file': video_filename
+                'video_file': video_filename,
+                'ai_analysis': session_data.get('ai_analysis', {})
             }), 200
         else:
             return jsonify({
@@ -654,6 +695,97 @@ def get_emotion_data():
     except:
         return {}
 
+def analyze_session_with_ai(session_data):
+    """Analyze session using Gemini AI and provide recommendations"""
+    if not GEMINI_AVAILABLE:
+        return {
+            'summary': 'AI analysis not available',
+            'recommendation': 'Manual review required',
+            'suspicion_level': 'UNKNOWN',
+            'reasoning': 'Gemini API not configured'
+        }
+    
+    try:
+        # Prepare session context for AI
+        tells_summary = []
+        for tell in session_data.get('tells', []):
+            tells_summary.append(f"- {tell.get('type', 'unknown')}: {tell.get('message', 'N/A')}")
+        
+        tells_text = "\n".join(tells_summary) if tells_summary else "No deception indicators detected"
+        
+        duration_seconds = session_data.get('end_time', 0) - session_data.get('start_time', 0)
+        duration_mins = int(duration_seconds // 60)
+        duration_secs = int(duration_seconds % 60)
+        
+        metrics = session_data.get('metrics', {})
+        
+        # Create detailed prompt for Gemini
+        prompt = f"""Bạn là chuyên gia phân tích hành vi và tâm lý trong thẩm vấn. Hãy phân tích phiên phỏng vấn sau:
+
+**THÔNG TIN PHIÊN:**
+- Tên phiên: {session_data.get('session_name', 'Unknown')}
+- Thời lượng: {duration_mins} phút {duration_secs} giây
+- Tổng số tells (dấu hiệu lừa dối): {len(session_data.get('tells', []))}
+
+**CÁC DẤU HIỆU PHÁT HIỆN:**
+{tells_text}
+
+**CHỈ SỐ SINH LÝ:**
+- Nhịp tim trung bình: {metrics.get('bpm', 'N/A')} BPM
+- Cảm xúc phát hiện: {metrics.get('emotion', 'N/A')}
+- Mức độ stress: {metrics.get('stress_level', 'N/A')}
+- Điểm cử chỉ: {metrics.get('gesture_score', 'N/A')}
+
+YÊU CẦU PHÂN TÍCH:
+1. **TÓM TẮT**: Tóm tắt ngắn gọn phiên phỏng vấn (2-3 câu)
+2. **MỨC ĐỘ KHẢ NGHI**: Đánh giá LOW/MEDIUM/HIGH với giải thích chi tiết
+3. **KHUYẾN NGHỊ**: Có nên tiếp tục thẩm vấn không? Tại sao?
+4. **LÝ DO CỤ THỂ**: Phân tích từng dấu hiệu và ý nghĩa của chúng
+5. **GỢI Ý HÀNH ĐỘNG**: Nếu tiếp tục, nên tập trung vào điểm nào?
+
+Trả lời bằng JSON format:
+{{
+  "summary": "Tóm tắt ngắn gọn",
+  "suspicion_level": "LOW/MEDIUM/HIGH",
+  "suspicion_score": 0-100,
+  "recommendation": "Có nên tiếp tục thẩm vấn",
+  "reasoning": "Giải thích chi tiết tại sao",
+  "key_indicators": ["Dấu hiệu quan trọng 1", "Dấu hiệu 2"],
+  "suggested_questions": ["Câu hỏi nên hỏi thêm 1", "Câu hỏi 2"]
+}}
+"""
+        
+        # Call Gemini API
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = model.generate_content(prompt)
+        
+        # Parse JSON response
+        response_text = response.text.strip()
+        # Remove markdown code blocks if present
+        if response_text.startswith('```json'):
+            response_text = response_text[7:]
+        if response_text.startswith('```'):
+            response_text = response_text[3:]
+        if response_text.endswith('```'):
+            response_text = response_text[:-3]
+        response_text = response_text.strip()
+        
+        analysis = json.loads(response_text)
+        print(f"🤖 AI Analysis completed: {analysis.get('suspicion_level', 'UNKNOWN')}")
+        return analysis
+        
+    except Exception as e:
+        print(f"❌ Error in AI analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'summary': 'AI analysis encountered an error',
+            'recommendation': 'Manual review recommended',
+            'suspicion_level': 'UNKNOWN',
+            'reasoning': f'Error: {str(e)}',
+            'error': str(e)
+        }
+
 def calculate_stress_level(tells):
     """Calculate stress level based on tells"""
     if not tells:
@@ -720,6 +852,31 @@ def run_camera_thread(session_id):
                         frame, face_landmarks, hands_landmarks, 
                         dd.baseline['calibrated'], 30
                     )
+                    
+                    # Save tells to session (only deception tells, not BPM display)
+                    # Track which tells we've already saved this detection cycle
+                    if dd.baseline['calibrated']:
+                        for tell_type, tell_data in tells.items():
+                            # Skip BPM display tell (avg_bpms is just for display)
+                            if tell_type == 'avg_bpms':
+                                continue
+                            
+                            # Check if this exact tell was just saved (within last 2 seconds to avoid immediate duplicates)
+                            # deception_detection.py already has throttling (30-90 frames), so we only prevent rapid duplicates
+                            tell_exists = any(
+                                t.get('type') == tell_type and 
+                                t.get('message') == tell_data.get('text', '') and
+                                abs(t.get('timestamp', 0) - time.time()) < 2  # Only last 2 seconds
+                                for t in session.tells
+                            )
+                            
+                            if not tell_exists:
+                                session.tells.append({
+                                    'type': tell_type,
+                                    'message': tell_data.get('text', ''),
+                                    'timestamp': time.time()
+                                })
+                                print(f"🚨 Tell detected: {tell_type} - {tell_data.get('text', '')}")
                     
                     # Store current frame for streaming
                     with current_frame_lock:

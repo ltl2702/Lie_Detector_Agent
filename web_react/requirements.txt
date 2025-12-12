@@ -8,6 +8,9 @@ python-dotenv==1.0.0
 eventlet==0.33.3
 Werkzeug==3.0.1
 
+# AI Analysis
+google-generativeai==0.3.2
+
 # Detection Engine (Core dependencies)
 opencv-contrib-python==4.9.0.80
 mediapipe==0.10.21

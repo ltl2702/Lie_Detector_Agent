@@ -8,6 +8,7 @@ import TruthMeter from './components/TruthMeter';
 import AlertSystem from './components/AlertSystem';
 import ReviewMode from './components/ReviewMode';
 import SessionHistory from './components/SessionHistory';
+import AIAnalysisModal from './components/AIAnalysisModal';
 
 export default function LieDetectorApp() {
   const [viewMode, setViewMode] = useState('live'); // 'live', 'history', 'review'
@@ -67,6 +68,10 @@ export default function LieDetectorApp() {
   
   // Video recording
   const [sessionVideoBlob, setSessionVideoBlob] = useState(null);
+  
+  // AI Analysis
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [showAiAnalysis, setShowAiAnalysis] = useState(false);
   
   // Handle ending session
   const handleEndSession = async () => {
@@ -155,6 +160,13 @@ export default function LieDetectorApp() {
       
       // Call backend to end session and save video
       const response = await api.endSession(currentSessionId, sessionData);
+      
+      // Show AI analysis if available
+      if (response.data?.ai_analysis) {
+        console.log('🤖 Received AI analysis:', response.data.ai_analysis);
+        setAiAnalysis(response.data.ai_analysis);
+        setShowAiAnalysis(true);
+      }
       
       // Disconnect websocket
       if (wsRef.current) {
@@ -903,6 +915,17 @@ export default function LieDetectorApp() {
         </div>
         )}
       </div>
+      
+      {/* AI Analysis Modal - Shows on top of everything */}
+      {showAiAnalysis && aiAnalysis && (
+        <AIAnalysisModal 
+          analysis={aiAnalysis} 
+          onClose={() => {
+            setShowAiAnalysis(false);
+            setAiAnalysis(null);
+          }} 
+        />
+      )}
     </div>
   );
 }

@@ -9,3 +9,5 @@ memory/
 src/venv/
 *.mp4
 recordings/
+.env
+web_react/.env
