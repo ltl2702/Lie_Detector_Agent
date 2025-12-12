@@ -34,8 +34,14 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   // Ref để đếm tổng số lần (Count) thay vì Buffer frame
   const totalBlinks = useRef(0);
   const totalHandTouches = useRef(0);
-  // Ref để chứa danh sách thời điểm chớp mắt (dùng cho Sliding Window)
+  // 1. Ref để chứa danh sách thời điểm chớp mắt (dùng cho Sliding Window)
   const blinkTimestamps = useRef([]);
+  // 2. Dùng cho Count: Đếm số lần trong chu kỳ 60s hiện tại
+  const currentCycleBlinks = useRef(0);
+  const cycleStartTime = useRef(Date.now()); // Mốc thời gian bắt đầu chu kỳ 60s
+
+  // 3. Logic phát hiện (Debounce/Edge detection)
+  const isBlinkingRef = useRef(false);
 
   const lastBlinkTime = useRef(0);
   const lastHandTouchTime = useRef(0);
@@ -328,6 +334,15 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       frameCountRef.current++;
       const now = Date.now(); // Lấy thời gian hiện tại
 
+      if (now - cycleStartTime.current > 60000) {
+        console.log(
+          "⏱️ 60s Cycle Reset! Prev Count:",
+          currentCycleBlinks.current
+        );
+        currentCycleBlinks.current = 0;
+        cycleStartTime.current = now;
+      }
+
       // let blink = false;
       let handToFace = false;
       let lipCompression = false;
@@ -344,14 +359,30 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
         // blink = isBlinking(landmarks);
         // Tính EAR chi tiết để Debug
-        const rightEAR = getEyeAspectRatio(landmarks, [159, 145, 133, 33]);
-        const leftEAR = getEyeAspectRatio(landmarks, [386, 374, 362, 263]);
-        currentEAR = (rightEAR + leftEAR) / 2;
+        // const rightEAR = getEyeAspectRatio(landmarks, [159, 145, 133, 33]);
+        // const leftEAR = getEyeAspectRatio(landmarks, [386, 374, 362, 263]);
+        // currentEAR = (rightEAR + leftEAR) / 2;
 
         // So sánh với ngưỡng
-        if (currentEAR < EYE_BLINK_THRESHOLD) {
-          isBlinkingNow = true;
+        // if (currentEAR < EYE_BLINK_THRESHOLD) {
+        //   isBlinkingNow = true;
+        // }
+        // Detect Blink
+        isBlinkingNow = isBlinking(landmarks);
+        // Logic đếm (Chỉ tăng khi chuyển từ Mở -> Nhắm và cooldown 300ms)
+        if (isBlinkingNow && !isBlinkingRef.current) {
+          if (now - lastBlinkTime.current > 300) {
+            // Tăng biến đếm của chu kỳ hiện tại (sẽ reset về 0 mỗi phút)
+            currentCycleBlinks.current += 1;
+
+            // Thêm timestamp vào mảng để tính Rate (Sliding Window)
+            blinkTimestamps.current.push(now);
+
+            lastBlinkTime.current = now;
+          }
         }
+        isBlinkingRef.current = isBlinkingNow;
+
         // Lip Compression Detection
         // Ngưỡng 0.35
         const lipRatio = calculateLipRatio(landmarks);
@@ -445,6 +476,15 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         //   (h) => h
         // ).length;
 
+        // Tính Rate bằng Sliding Window:
+        // Lọc bỏ các timestamp cũ hơn 60s
+        blinkTimestamps.current = blinkTimestamps.current.filter(
+          (t) => now - t <= 60000
+        );
+
+        // Rate = Số lượng blink còn lại trong cửa sổ 60s
+        let slidingWindowRate = blinkTimestamps.current.length;
+
         // Calculate per minute rates
         const secondsRecorded = blinksBuffer.current.length / 30;
         // Tính phút đã trôi qua để tính tốc độ chớp mắt trung bình
@@ -460,8 +500,9 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         // const handToFaceFreq = secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
 
         onMetricsUpdate({
-          blinkRate: currentBlinkRate, // Tốc độ trung bình (lần/phút)
+          blinkRate: slidingWindowRate, // Tốc độ trung bình (lần/phút)
           // blinkCount: totalBlinks.current, // Tổng số lần chớp từ đầu buổi
+          blinkCount: currentCycleBlinks.current, // Tổng số lần chớp trong chu kỳ 60s hiện tại
           // handToFaceFrequency: Math.round(handToFaceFreq * 10) / 10,
           // currentBlink: blink,
           // currentBlink: isBlinkingNow,
