@@ -47,6 +47,27 @@ class DetectionSession:
         self.frame_count = 0
         self.emotion_detector = None
         self.cap = None  # Camera capture object
+        self.video_writer = None  # Video writer for recording
+        self.video_filename = None  # Output video filename
+        self.recording = False  # Recording status
+        
+        # Initialize MediaPipe for landmarks
+        self.mp_face_mesh = mp.solutions.face_mesh
+        self.mp_hands = mp.solutions.hands
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing_styles = mp.solutions.drawing_styles
+        
+        self.face_mesh = self.mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        self.hands = self.mp_hands.Hands(
+            max_num_hands=2,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
         
     def start_camera_capture(self):
         """Start camera capture thread"""
@@ -85,13 +106,66 @@ class DetectionSession:
                 frame_count += 1
                 self.frame_count = frame_count
                 
+                # Process frame with landmarks if recording
+                frame_to_save = frame.copy()
+                if self.recording and self.video_writer:
+                    # Convert BGR to RGB for MediaPipe
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    
+                    # Process face mesh
+                    face_results = self.face_mesh.process(frame_rgb)
+                    if face_results.multi_face_landmarks:
+                        for face_landmarks in face_results.multi_face_landmarks:
+                            # Draw face mesh
+                            self.mp_drawing.draw_landmarks(
+                                image=frame_to_save,
+                                landmark_list=face_landmarks,
+                                connections=self.mp_face_mesh.FACEMESH_TESSELATION,
+                                landmark_drawing_spec=None,
+                                connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_tesselation_style()
+                            )
+                            # Draw face contours
+                            self.mp_drawing.draw_landmarks(
+                                image=frame_to_save,
+                                landmark_list=face_landmarks,
+                                connections=self.mp_face_mesh.FACEMESH_CONTOURS,
+                                landmark_drawing_spec=None,
+                                connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_contours_style()
+                            )
+                    
+                    # Process hands
+                    hand_results = self.hands.process(frame_rgb)
+                    if hand_results.multi_hand_landmarks:
+                        for hand_landmarks in hand_results.multi_hand_landmarks:
+                            # Draw hand landmarks
+                            self.mp_drawing.draw_landmarks(
+                                image=frame_to_save,
+                                landmark_list=hand_landmarks,
+                                connections=self.mp_hands.HAND_CONNECTIONS,
+                                landmark_drawing_spec=self.mp_drawing_styles.get_default_hand_landmarks_style(),
+                                connection_drawing_spec=self.mp_drawing_styles.get_default_hand_connections_style()
+                            )
+                    
+                    # Add timestamp and session info
+                    timestamp_text = f"Session: {self.session_id} | Time: {datetime.now().strftime('%H:%M:%S')}"
+                    cv2.putText(frame_to_save, timestamp_text, (10, 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Write frame to video
+                    self.video_writer.write(frame_to_save)
+                
                 # Store current frame thread-safely
                 with current_frame_lock:
                     current_frame = frame
                 
                 # Log every 30 frames
                 if frame_count % 30 == 0:
-                    print(f"📹 Captured {frame_count} frames")
+                    print(f"📹 Captured {frame_count} frames" + (" (Recording)" if self.recording else ""))
+            
+            # Clean up
+            if self.video_writer:
+                self.video_writer.release()
+                print(f"💾 Video saved: {self.video_filename}")
             
             if self.cap:
                 self.cap.release()
@@ -105,10 +179,51 @@ class DetectionSession:
     def stop_camera_capture(self):
         """Stop camera capture thread"""
         self.camera_running = False
+        self.recording = False
         if self.camera_thread:
             self.camera_thread.join(timeout=2)
+        if self.video_writer:
+            self.video_writer.release()
+            self.video_writer = None
         if self.cap:
             self.cap.release()
+    
+    def start_recording(self):
+        """Start video recording with landmarks"""
+        if self.recording:
+            return  # Already recording
+        
+        # Create recordings directory
+        recordings_dir = Path(__file__).parent.parent / 'recordings'
+        recordings_dir.mkdir(exist_ok=True)
+        
+        # Generate filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.video_filename = recordings_dir / f"session_{self.session_id}_{timestamp}.mp4"
+        
+        # Get frame dimensions from camera
+        if self.cap:
+            frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = int(self.cap.get(cv2.CAP_PROP_FPS)) or 30
+            
+            # Create VideoWriter
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.video_writer = cv2.VideoWriter(
+                str(self.video_filename),
+                fourcc,
+                fps,
+                (frame_width, frame_height)
+            )
+            
+            if self.video_writer.isOpened():
+                self.recording = True
+                print(f"🎥 Started recording: {self.video_filename}")
+                return True
+            else:
+                print(f"❌ Failed to start recording")
+                return False
+        return False
         
     def to_dict(self):
         return {
@@ -154,10 +269,14 @@ def start_session():
 
 @app.route('/api/session/<session_id>/end', methods=['POST'])
 def end_session(session_id):
-    """End a detection session and save to file"""
+    """End a detection session and save to file with video"""
     try:
         if session_id in sessions:
             session = sessions[session_id]
+            
+            # Store video filename before stopping camera
+            video_filename = str(session.video_filename.name) if session.video_filename else None
+            
             if session.camera_running:
                 session.stop_camera_capture()
             
@@ -183,7 +302,7 @@ def end_session(session_id):
                         'message': tell.get('message', '')
                     } for tell in session.tells
                 ] if session.tells else [],
-                'video_file': None
+                'video_file': video_filename
             }
             
             # Save to sessions directory
@@ -197,6 +316,8 @@ def end_session(session_id):
                 json.dump(session_data, f, indent=2)
             
             print(f"📝 Session {session_id} saved to {session_filepath}")
+            if video_filename:
+                print(f"🎥 Video recording saved: {video_filename}")
             
             # Clean up session
             del sessions[session_id]
@@ -205,7 +326,8 @@ def end_session(session_id):
             return jsonify({
                 'status': 'success',
                 'message': 'Session ended and saved',
-                'session_file': str(session_filename)
+                'session_file': str(session_filename),
+                'video_file': video_filename
             }), 200
         else:
             return jsonify({
@@ -246,7 +368,7 @@ def get_baseline(session_id):
 
 @app.route('/api/session/<session_id>/calibrate', methods=['POST'])
 def calibrate_session(session_id):
-    """Mark session as calibrated and start camera"""
+    """Mark session as calibrated and start camera with recording"""
     try:
         if session_id not in sessions:
             return jsonify({
@@ -260,9 +382,15 @@ def calibrate_session(session_id):
         # Start camera capture
         session.start_camera_capture()
         
+        # Start recording when calibration begins
+        import time
+        time.sleep(0.5)  # Wait for camera to initialize
+        if session.cap and session.cap.isOpened():
+            session.start_recording()
+        
         return jsonify({
             'status': 'success',
-            'message': 'Calibration complete',
+            'message': 'Calibration complete and recording started',
             'baseline': dd.baseline
         }), 200
     except Exception as e:

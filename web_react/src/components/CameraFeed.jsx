@@ -16,11 +16,13 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const canvasRef = useRef(null);
   const [error, setError] = useState(null);
   const [streamActive, setStreamActive] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const faceMeshRef = useRef(null);
   const handsRef = useRef(null);
   const cameraRef = useRef(null);
   const resultsRef = useRef({ face: null, hands: null });
   const modelsReady = useRef({ faceMesh: false, hands: false });
+  const drawingRef = useRef(false); // Prevent concurrent drawing
   
   // Metrics tracking
   const blinksBuffer = useRef([]);
@@ -31,40 +33,17 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   useEffect(() => {
     let currentStream = null;
 
-    const startCamera = async () => {
-      try {
-        // Truy cập camera trực tiếp từ browser
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { 
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: "user"
-          }, 
-          audio: false 
-        });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          currentStream = stream;
-          setStreamActive(true);
-          
-          // Start continuous drawing loop for video
-          videoRef.current.onloadedmetadata = () => {
-            startDrawingLoop();
-          };
-          
-          // Initialize MediaPipe FaceMesh and Hands
-          initializeMediaPipe();
-        }
-      } catch (err) {
-        console.error("Camera error:", err);
-        setError("Cannot access camera. Please allow camera permission!");
-      }
-    };
-
     const initializeMediaPipe = async () => {
       try {
         console.log('🔧 Initializing MediaPipe models...');
+        setModelsLoading(true);
+        
+        // Prevent double initialization in React StrictMode
+        if (faceMeshRef.current || handsRef.current) {
+          console.log('⚠️ MediaPipe already initialized, skipping...');
+          setModelsLoading(false);
+          return true;
+        }
         
         // Initialize FaceMesh
         const faceMesh = new FaceMesh({
@@ -82,13 +61,22 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
 
         faceMesh.onResults((results) => {
           resultsRef.current.face = results;
-          // Mark model as ready on first results
           if (!modelsReady.current.faceMesh) {
             console.log('✅ FaceMesh ready');
             modelsReady.current.faceMesh = true;
           }
+          // Request draw on next animation frame (throttled)
+          if (!drawingRef.current) {
+            drawingRef.current = true;
+            requestAnimationFrame(() => {
+              drawResults();
+              drawingRef.current = false;
+            });
+          }
         });
+        
         faceMeshRef.current = faceMesh;
+        console.log('✅ FaceMesh created');
 
         // Initialize Hands
         const hands = new Hands({
@@ -106,60 +94,103 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
 
         hands.onResults((results) => {
           resultsRef.current.hands = results;
-          // Mark model as ready on first results
           if (!modelsReady.current.hands) {
             console.log('✅ Hands ready');
             modelsReady.current.hands = true;
           }
+          // Request draw on next animation frame (throttled)
+          if (!drawingRef.current) {
+            drawingRef.current = true;
+            requestAnimationFrame(() => {
+              drawResults();
+              drawingRef.current = false;
+            });
+          }
         });
+        
         handsRef.current = hands;
+        console.log('✅ Hands created');
 
-        // Wait for models to fully initialize before starting camera
-        console.log('⏳ Waiting for MediaPipe WASM modules to load...');
+        // Wait for WASM modules to load
+        console.log('⏳ Loading MediaPipe WASM modules...');
         await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Start camera processing
-        if (videoRef.current) {
-          const camera = new Camera(videoRef.current, {
-            onFrame: async () => {
-              // Only send frames after models are initialized
-              if (faceMeshRef.current && handsRef.current && videoRef.current) {
-                try {
-                  await faceMeshRef.current.send({ image: videoRef.current });
-                  await handsRef.current.send({ image: videoRef.current });
-                } catch (err) {
-                  // Silently handle initialization errors
-                  if (!modelsReady.current.faceMesh || !modelsReady.current.hands) {
-                    // Still initializing, suppress errors
-                    return;
-                  }
-                  console.error('Frame processing error:', err);
-                }
-              }
-            },
-            width: 1280,
-            height: 720
-          });
-          
-          console.log('🎥 Starting MediaPipe camera feed...');
-          camera.start();
-          cameraRef.current = camera;
-        }
+        
+        console.log('✅ All MediaPipe models ready!');
+        setModelsLoading(false);
+        
+        return true;
       } catch (err) {
         console.error('MediaPipe initialization error:', err);
         setError('Failed to initialize MediaPipe. Please refresh the page.');
+        setModelsLoading(false);
+        return false;
       }
     };
 
-    // Continuous drawing loop for video + landmarks
-    const startDrawingLoop = () => {
-      const draw = () => {
-        if (videoRef.current && canvasRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
-          drawResults();
+    const startCamera = async () => {
+      try {
+        // First, initialize MediaPipe models
+        const modelsInitialized = await initializeMediaPipe();
+        if (!modelsInitialized) {
+          return;
         }
-        requestAnimationFrame(draw);
-      };
-      draw();
+        
+        // Then access camera
+        console.log('📷 Opening camera...');
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { 
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: "user"
+          }, 
+          audio: false 
+        });
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          currentStream = stream;
+          setStreamActive(true);
+          
+          // Wait for video to be ready, then start MediaPipe processing
+          videoRef.current.onloadedmetadata = () => {
+            console.log('📹 Video stream ready');
+            startMediaPipeProcessing();
+          };
+        }
+      } catch (err) {
+        console.error("Camera error:", err);
+        setError("Cannot access camera. Please allow camera permission!");
+        setModelsLoading(false);
+      }
+    };
+
+    const startMediaPipeProcessing = () => {
+      // Start camera processing with MediaPipe
+      if (videoRef.current && faceMeshRef.current && handsRef.current) {
+        const camera = new Camera(videoRef.current, {
+          onFrame: async () => {
+            // Only send frames after models are ready
+            if (faceMeshRef.current && handsRef.current && videoRef.current) {
+              try {
+                await faceMeshRef.current.send({ image: videoRef.current });
+                await handsRef.current.send({ image: videoRef.current });
+              } catch (err) {
+                // Silently handle errors during processing
+                if (!modelsReady.current.faceMesh || !modelsReady.current.hands) {
+                  return;
+                }
+                console.error('Frame processing error:', err);
+              }
+            }
+          },
+          width: 1280,
+          height: 720
+        });
+        
+        console.log('🎥 Starting MediaPipe camera processing...');
+        camera.start();
+        cameraRef.current = camera;
+      }
     };
 
     // Helper: Calculate eye aspect ratio
@@ -368,12 +399,23 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     startCamera();
 
     return () => {
+      console.log('🧹 Cleaning up camera and MediaPipe...');
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
       if (cameraRef.current) {
         cameraRef.current.stop();
       }
+      // Clean up MediaPipe instances
+      if (faceMeshRef.current) {
+        faceMeshRef.current.close();
+        faceMeshRef.current = null;
+      }
+      if (handsRef.current) {
+        handsRef.current.close();
+        handsRef.current = null;
+      }
+      modelsReady.current = { faceMesh: false, hands: false };
     };
   }, []);
 
@@ -386,10 +428,24 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           </div>
         )}
 
-        {!streamActive && !error && (
+        {modelsLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-20">
+            <div className="text-center">
+              <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+              <div className="text-gray-300 text-sm font-semibold mb-2">
+                Loading MediaPipe Models...
+              </div>
+              <div className="text-gray-400 text-xs">
+                Please wait while we initialize face and hand detection
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!streamActive && !error && !modelsLoading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-gray-500 text-sm animate-pulse">
-              Accessing camera...
+              Opening camera...
             </div>
           </div>
         )}
@@ -410,11 +466,13 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         />
 
         {/* Status overlay */}
-        <div className="absolute bottom-2 left-2 text-xs text-gray-300 bg-black/50 px-2 py-1 rounded z-10">
-          <span className={calibrated ? 'text-green-400' : 'text-yellow-400'}>
-            {calibrated ? '● ANALYZING' : '● CALIBRATING'}
-          </span>
-        </div>
+        {streamActive && !modelsLoading && (
+          <div className="absolute bottom-2 left-2 text-xs text-gray-300 bg-black/50 px-2 py-1 rounded z-10">
+            <span className={calibrated ? 'text-green-400' : 'text-yellow-400'}>
+              {calibrated ? '● ANALYZING' : '● CALIBRATING'}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

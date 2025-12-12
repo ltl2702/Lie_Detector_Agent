@@ -66,6 +66,9 @@ export default function LieDetectorApp() {
   const handleEndSession = async () => {
     if (!sessionId) return;
     
+    const confirmEnd = window.confirm('Are you sure you want to end this session? The video will be saved.');
+    if (!confirmEnd) return;
+    
     try {
       // Save session data
       const sessionData = {
@@ -74,20 +77,33 @@ export default function LieDetectorApp() {
         start_time: Date.now() / 1000,
         end_time: Date.now() / 1000,
         baseline: baseline,
-        tells: tells,
+        tells: tells.map(t => ({
+          message: t.message,
+          type: t.type,
+          timestamp: Date.now() / 1000
+        })),
         metrics: {
           bpm: bpm,
           emotion: dominantEmotion,
-          stress_level: stressLevel
+          stress_level: stressLevel,
+          gesture_score: gestureScore
         }
       };
       
-      // Call backend to end session
-      await api.endSession(sessionId, sessionData);
+      // Call backend to end session and save video
+      const response = await api.endSession(sessionId, sessionData);
+      
+      // Disconnect websocket
+      if (wsRef.current) {
+        wsRef.current.disconnect();
+      }
       
       // Reset state
       setCameraActive(false);
       setSessionId(null);
+      setIsCalibrating(false);
+      setCalibrationProgress(0);
+      setAnalyzing(false);
       setBaseline({
         bpm: 0,
         blink_rate: 0,
@@ -97,13 +113,15 @@ export default function LieDetectorApp() {
         calibrated: false
       });
       setTells([]);
+      setAlerts([]);
+      setShowAlert(false);
+      setTruthMeterPosition(30);
+      setBpm(0);
+      setStressLevel('LOW STRESS');
+      setStressColor('text-green-400');
       
-      // Disconnect websocket
-      if (wsRef.current) {
-        wsRef.current.disconnect();
-      }
-      
-      alert('Session ended and saved successfully!');
+      const videoFile = response.data.video_file;
+      alert(`Session ended successfully!\n${videoFile ? `Video saved: ${videoFile}` : 'Session saved.'}`);
     } catch (error) {
       console.error('Error ending session:', error);
       alert('Failed to end session');
@@ -392,6 +410,24 @@ export default function LieDetectorApp() {
       return () => clearInterval(interval);
     }
   }, [cameraActive, isCalibrating, baseline]);
+
+  // TTL countdown for tells - auto-remove when expired
+  useEffect(() => {
+    if (tells.length === 0 || !cameraActive) return;
+    
+    const interval = setInterval(() => {
+      setTells(prev => {
+        const updated = prev.map(tell => ({
+          ...tell,
+          ttl: tell.ttl - 1
+        })).filter(tell => tell.ttl > 0);
+        
+        return updated;
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [tells.length, cameraActive]);
 
   const addTell = (message, type) => {
     const newTell = {
@@ -724,8 +760,8 @@ export default function LieDetectorApp() {
                 )}
               </div>
               
-              {/* Detection Tells */}
-              {tells.map(tell => (
+              {/* Detection Tells - only show during active session */}
+              {cameraActive && baseline.calibrated && tells.map(tell => (
                 <div key={tell.id} className="bg-yellow-900 bg-opacity-50 border-2 border-yellow-600 rounded-lg p-3 flex items-center justify-between animate-pulse">
                   <span className="text-base font-semibold text-yellow-200">{tell.message}</span>
                   <span className="text-sm text-yellow-400 font-bold">{tell.ttl}s</span>
