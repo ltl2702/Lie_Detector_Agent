@@ -64,8 +64,8 @@ export default function SessionHistory({ onSelectSession }) {
                     <h3 className="text-lg font-semibold text-white group-hover:text-blue-400 transition">
                       {session.session_name}
                     </h3>
-                    <span className="text-xs px-2 py-1 bg-blue-900 text-blue-400 rounded">
-                      {session.events?.length || 0} events
+                    <span className="text-xs px-2 py-1 bg-red-900 text-red-400 rounded">
+                      {session.tells?.length || 0} tells
                     </span>
                   </div>
 

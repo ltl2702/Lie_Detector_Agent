@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Play, Pause, RotateCcw, SkipBack, SkipForward, Clock, Calendar, TrendingUp } from 'lucide-react';
 
 export default function ReviewMode({ sessionData, onClose }) {
@@ -11,13 +11,33 @@ export default function ReviewMode({ sessionData, onClose }) {
   const [videoLoaded, setVideoLoaded] = useState(false);
   const videoRef = React.useRef(null);
 
+  // Convert tells to events format if events array is empty
+  const events = useMemo(() => {
+    if (sessionData?.events && sessionData.events.length > 0) {
+      return sessionData.events;
+    }
+    
+    // Convert tells to events format
+    if (sessionData?.tells && sessionData.tells.length > 0) {
+      return sessionData.tells.map(tell => ({
+        timestamp: tell.timestamp || 0,
+        tell_type: tell.type || 'detection',
+        tell_text: tell.message || '',
+        stress_level: ['lips', 'blink', 'bpm'].includes(tell.type) ? 2 : 1,
+        confidence: 0.8
+      }));
+    }
+    
+    return [];
+  }, [sessionData]);
+
   // Use video duration if available and valid, otherwise fall back to session duration
   const duration = (videoDuration > 0 && isFinite(videoDuration))
     ? videoDuration 
     : (sessionData?.end_time && sessionData?.start_time
       ? sessionData.end_time - sessionData.start_time
-      : (sessionData?.events?.length > 0 
-        ? sessionData.events[sessionData.events.length - 1].timestamp 
+      : (events.length > 0 
+        ? events[events.length - 1].timestamp 
         : 0));
 
   useEffect(() => {
@@ -110,11 +130,11 @@ export default function ReviewMode({ sessionData, onClose }) {
     handleSeekToTime(newTime);
   };
 
-  const eventsAtCurrentTime = sessionData?.events?.filter(event => {
+  const eventsAtCurrentTime = events.filter(event => {
     // Convert absolute timestamp to relative seconds from start_time
     const eventTime = event.timestamp - (sessionData?.start_time || 0);
     return Math.abs(eventTime - currentTime) < 2;
-  }) || [];
+  });
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-6">
@@ -238,7 +258,7 @@ export default function ReviewMode({ sessionData, onClose }) {
                   onClick={handleSeek}
                 >
                   {/* Event markers */}
-                  {sessionData?.events?.map((event, idx) => (
+                  {events.map((event, idx) => (
                     <div
                       key={idx}
                       className={`absolute top-0 bottom-0 w-1 ${
@@ -316,7 +336,7 @@ export default function ReviewMode({ sessionData, onClose }) {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-400">Total Events:</span>
-                  <span className="text-white font-semibold">{sessionData?.events?.length || 0}</span>
+                  <span className="text-white font-semibold">{events.length}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">Duration:</span>
