@@ -72,6 +72,7 @@ export default function LieDetectorApp() {
   // AI Analysis
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [showAiAnalysis, setShowAiAnalysis] = useState(false);
+  const [isAnalyzingSession, setIsAnalyzingSession] = useState(false);
   
   // Handle ending session
   const handleEndSession = async () => {
@@ -159,7 +160,9 @@ export default function LieDetectorApp() {
       };
       
       // Call backend to end session and save video
+      setIsAnalyzingSession(true);
       const response = await api.endSession(currentSessionId, sessionData);
+      setIsAnalyzingSession(false);
       
       // Show AI analysis if available
       if (response.data?.ai_analysis) {
@@ -925,6 +928,29 @@ export default function LieDetectorApp() {
             setAiAnalysis(null);
           }} 
         />
+      )}
+      
+      {/* AI Analysis Loading Overlay */}
+      {isAnalyzingSession && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-gray-800 rounded-2xl p-8 shadow-2xl border border-purple-500/30 max-w-md animate-pulse">
+            <div className="flex flex-col items-center space-y-4">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <svg className="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                </div>
+              </div>
+              <div className="text-center">
+                <h3 className="text-xl font-bold text-white mb-2">🤖 AI Đang Phân Tích...</h3>
+                <p className="text-gray-400 text-sm">Vui lòng đợi trong giây lát</p>
+                <p className="text-purple-400 text-xs mt-2">Gemini AI đang xử lý dữ liệu phiên làm việc</p>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
