@@ -562,6 +562,113 @@ def handle_leave_session(data):
     leave_room(session_id)
     emit('response', {'data': f'Left session {session_id}'})
 
+@socketio.on('upload_video')
+def handle_upload_video(data):
+    """Handle video upload from frontend (WebM format)"""
+    import subprocess
+    import base64
+    
+    try:
+        session_id = data.get('session_id')
+        video_data = data.get('video_data')  # Base64 encoded WebM
+        
+        if not session_id or not video_data:
+            emit('upload_error', {'message': 'Missing session_id or video_data'})
+            return
+        
+        # Create recordings directory
+        recordings_dir = Path(__file__).parent.parent / 'recordings'
+        recordings_dir.mkdir(exist_ok=True)
+        
+        # Generate filenames
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        webm_filename = recordings_dir / f"session_{session_id}_{timestamp}.webm"
+        mp4_filename = recordings_dir / f"session_{session_id}_{timestamp}.mp4"
+        
+        # Decode and save WebM file
+        try:
+            video_bytes = base64.b64decode(video_data)
+            with open(webm_filename, 'wb') as f:
+                f.write(video_bytes)
+            print(f"📥 WebM uploaded: {webm_filename}")
+        except Exception as e:
+            print(f"❌ Failed to save WebM: {e}")
+            emit('upload_error', {'message': f'Failed to save WebM: {str(e)}'})
+            return
+        
+        # Verify WebM file is not empty and has valid size
+        webm_size = webm_filename.stat().st_size
+        if webm_size < 100:  # Less than 100 bytes is definitely corrupt
+            print(f"⚠️ WebM file too small ({webm_size} bytes), likely corrupt")
+            webm_filename.unlink()  # Delete corrupt file
+            emit('upload_error', {'message': 'Uploaded video file is corrupt or too small'})
+            return
+        
+        # Try to convert WebM to MP4 using FFmpeg
+        convert_success = False
+        try:
+            # Use FFmpeg to convert WebM to MP4
+            # -i: input file
+            # -c:v libx264: use H.264 codec for video
+            # -preset fast: faster encoding
+            # -c:a aac: use AAC codec for audio
+            # -b:a 128k: audio bitrate
+            # -y: overwrite output file if exists
+            result = subprocess.run(
+                [
+                    'ffmpeg',
+                    '-i', str(webm_filename),
+                    '-c:v', 'libx264',
+                    '-preset', 'fast',
+                    '-c:a', 'aac',
+                    '-b:a', '128k',
+                    '-y',
+                    str(mp4_filename)
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0 and mp4_filename.exists():
+                convert_success = True
+                print(f"✅ Converted to MP4: {mp4_filename}")
+                # Delete WebM after successful conversion
+                webm_filename.unlink()
+                final_filename = mp4_filename
+            else:
+                print(f"⚠️ FFmpeg conversion failed, keeping WebM")
+                print(f"FFmpeg stderr: {result.stderr}")
+                final_filename = webm_filename
+                
+        except subprocess.TimeoutExpired:
+            print("⚠️ FFmpeg conversion timeout, keeping WebM")
+            final_filename = webm_filename
+        except FileNotFoundError:
+            print("⚠️ FFmpeg not found, keeping WebM")
+            final_filename = webm_filename
+        except Exception as e:
+            print(f"⚠️ FFmpeg error: {e}, keeping WebM")
+            final_filename = webm_filename
+        
+        print(f"✅ Video saved: {final_filename}")
+        
+        # Update session with video filename
+        if session_id in sessions:
+            sessions[session_id].video_filename = final_filename
+        
+        emit('upload_complete', {
+            'message': 'Video uploaded successfully',
+            'filename': final_filename.name,
+            'converted': convert_success
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ Error handling video upload: {e}")
+        emit('upload_error', {'message': str(e)})
+
 # Helper functions
 def get_emotion_data():
     """Get current emotion data from detector"""
