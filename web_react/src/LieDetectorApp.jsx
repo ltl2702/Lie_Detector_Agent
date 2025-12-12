@@ -203,13 +203,6 @@ export default function LieDetectorApp() {
 
   // Handle metrics calculated from frontend
   const handleFrontendMetrics = (metrics) => {
-    // console.log("📸 CAMERA METRICS:", {
-    //   "Rate (chớp/phút)": metrics.blinkRate,
-    //   "Count (60s qua)": metrics.blinkCount,
-    //   "Hand Total (từ đầu)": metrics.handTouchTotal,
-    //   "Đang Chớp?": metrics.currentBlink,
-    //   "Đang Chạm?": metrics.currentHandToFace,
-    // });
     console.log("Frontend metrics:", metrics);
     // 1. Cập nhật Refs để dùng cho tính toán Calibration
     latestMetricsRef.current = metrics;
@@ -792,13 +785,77 @@ export default function LieDetectorApp() {
                       <div className="text-xs text-gray-500">blinks/min</div>
                     </div>
                   </div>
-                  {baseline.calibrated && (
+                  {/* {baseline.calibrated && (
                     <div className="bg-gray-900/50 rounded-lg p-3">
                       <div className="flex justify-between items-center text-sm mb-2">
                         <span className="text-gray-400">Deviation</span>
                         <span className="font-bold text-green-400">
                           {(blinkMetrics.rate - baseline.blink_rate).toFixed(0)}
                         </span>
+                      </div>
+                    </div>
+                  )} */}
+                  {/* Hàng 2: Deviation (Sự thay đổi) */}
+                  {baseline.calibrated && (
+                    <div className="bg-gray-900/50 rounded-lg p-3">
+                      <div className="flex justify-between items-center text-sm mb-2">
+                        <span className="text-gray-400">
+                          Deviation vs Baseline
+                        </span>
+                        {(() => {
+                          const diff = blinkMetrics.rate - baseline.blink_rate;
+                          const percent =
+                            baseline.blink_rate > 0
+                              ? (diff / baseline.blink_rate) * 100
+                              : 0;
+                          const isHigh = percent > 50; // Cao hơn 50%
+                          const isLow = percent < -50; // Thấp hơn 50%
+
+                          return (
+                            <span
+                              className={`font-bold ${
+                                isHigh
+                                  ? "text-red-400"
+                                  : isLow
+                                  ? "text-yellow-400"
+                                  : "text-green-400"
+                              }`}
+                            >
+                              {diff > 0 ? "+" : ""}
+                              {percent.toFixed(0)}%
+                            </span>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Progress Bar visualizing deviation */}
+                      <div className="relative h-2 bg-gray-700 rounded-full overflow-hidden">
+                        {/* Center marker */}
+                        <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/30 z-10"></div>
+
+                        {/* Bar */}
+                        {(() => {
+                          const diff = blinkMetrics.rate - baseline.blink_rate;
+                          // Max range visual là +/- 20 nhịp
+                          const clampedDiff = Math.max(-20, Math.min(20, diff));
+                          const widthPercent =
+                            (Math.abs(clampedDiff) / 20) * 50; // 0 -> 50% width
+
+                          return (
+                            <div
+                              className={`absolute top-0 bottom-0 transition-all duration-500 ${
+                                diff > 0
+                                  ? "left-1/2 bg-red-500"
+                                  : "right-1/2 bg-yellow-500"
+                              }`}
+                              style={{ width: `${widthPercent}%` }}
+                            />
+                          );
+                        })()}
+                      </div>
+                      <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                        <span>Low (Focus/Lying)</span>
+                        <span>High (Stress)</span>
                       </div>
                     </div>
                   )}
