@@ -5,17 +5,20 @@
 ### Frontend Setup (React)
 
 1. Install dependencies:
+
 ```bash
 cd web_react
 npm install
 ```
 
 2. Create `.env` file:
+
 ```
 REACT_APP_API_URL=http://localhost:5000
 ```
 
 3. Start development server:
+
 ```bash
 npm start
 ```
@@ -25,11 +28,13 @@ Frontend will be available at `http://localhost:3000`
 ### Backend Setup (Flask)
 
 1. Install Python dependencies:
+
 ```bash
 pip install flask flask-cors flask-socketio python-socketio python-engineio
 ```
 
 2. Run the Flask server:
+
 ```bash
 python web_react/backend.py
 ```
@@ -41,12 +46,14 @@ Backend API will be available at `http://localhost:5000`
 ### Option 1: Separate Terminals
 
 Terminal 1 (Frontend):
+
 ```bash
 cd web_react
 npm start
 ```
 
 Terminal 2 (Backend):
+
 ```bash
 python web_react/backend.py
 ```
@@ -54,6 +61,7 @@ python web_react/backend.py
 ### Option 2: Using concurrently (Node.js)
 
 From `web_react` directory:
+
 ```bash
 npm install -D concurrently
 npm start  # This will run both servers
@@ -64,6 +72,7 @@ npm start  # This will run both servers
 ## API Endpoints
 
 ### Sessions
+
 - `POST /api/session/start` - Start new detection session
 - `POST /api/session/<session_id>/end` - End session
 - `GET /api/session/<session_id>/baseline` - Get baseline metrics
@@ -72,10 +81,12 @@ npm start  # This will run both servers
 - `GET /api/sessions` - List all active sessions
 
 ### Camera Control
+
 - `POST /api/camera/start` - Start camera for session
 - `POST /api/camera/stop` - Stop camera for session
 
 ### WebSocket Events
+
 - `connect` - Connection established
 - `disconnect` - Connection closed
 - `join_session` - Join session room
@@ -106,12 +117,14 @@ web_react/
 ## Features
 
 ### Calibration Phase
+
 - 60-second baseline establishment
 - BPM, blink rate, gaze stability measurement
 - Emotion detection (FER with MTCNN)
 - Hand-face contact frequency tracking
 
 ### Detection Phase
+
 - Real-time BPM monitoring
 - Blink pattern analysis
 - Facial emotion recognition
@@ -121,6 +134,7 @@ web_react/
 - Adaptive stress level assessment
 
 ### WebSocket Real-time Updates
+
 - Live metrics streaming
 - Tell detection alerts
 - Emotion updates
@@ -129,6 +143,7 @@ web_react/
 ## Integration with Python Backend
 
 The backend integrates directly with:
+
 - `deception_detection.py` - Core detection algorithms
 - `memory_system.py` - Learning and adaptation
 - MediaPipe - Face and hand tracking

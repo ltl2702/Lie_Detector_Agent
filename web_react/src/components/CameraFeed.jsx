@@ -1,13 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { FaceMesh } from '@mediapipe/face_mesh';
-import { Hands } from '@mediapipe/hands';
-import { Camera } from '@mediapipe/camera_utils';
-import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
-import { FACEMESH_TESSELATION, FACEMESH_RIGHT_EYE, FACEMESH_LEFT_EYE, FACEMESH_FACE_OVAL, FACEMESH_LIPS } from '@mediapipe/face_mesh';
-import { HAND_CONNECTIONS } from '@mediapipe/hands';
+import React, { useEffect, useRef, useState } from "react";
+import { FaceMesh } from "@mediapipe/face_mesh";
+import { Hands } from "@mediapipe/hands";
+import { Camera } from "@mediapipe/camera_utils";
+import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
+import {
+  FACEMESH_TESSELATION,
+  FACEMESH_RIGHT_EYE,
+  FACEMESH_LEFT_EYE,
+  FACEMESH_FACE_OVAL,
+  FACEMESH_LIPS,
+} from "@mediapipe/face_mesh";
+import { HAND_CONNECTIONS } from "@mediapipe/hands";
 
 // Constants for detection
-const EYE_BLINK_THRESHOLD = 0.15;
+const EYE_BLINK_THRESHOLD = 0.3; // Eye Aspect Ratio threshold
 const MAX_FRAMES = 120; // 4 seconds at 30fps
 const HAND_FACE_DISTANCE_THRESHOLD = 0.05;
 
@@ -21,12 +27,63 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const cameraRef = useRef(null);
   const resultsRef = useRef({ face: null, hands: null });
   const modelsReady = useRef({ faceMesh: false, hands: false });
-  
+
   // Metrics tracking
   const blinksBuffer = useRef([]);
   const handToFaceBuffer = useRef([]);
   const gazeBuffer = useRef([]);
   const frameCountRef = useRef(0);
+  // Hàm tính khoảng cách giữa 2 điểm (Euclidean distance)
+  const getDistance = (p1, p2) => {
+    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+  };
+  // Tính toán Lip Compression (Mím môi)
+  // Dựa trên logic Python: get_aspect_ratio(face[0], face[17], face[61], face[291])
+  const calculateLipRatio = (landmarks) => {
+    const top = landmarks[0]; // Môi trên
+    const bottom = landmarks[17]; // Môi dưới
+    const left = landmarks[61]; // Khóe miệng trái
+    const right = landmarks[291]; // Khóe miệng phải
+
+    const height = getDistance(top, bottom);
+    const width = getDistance(left, right);
+
+    // Tránh chia cho 0
+    if (width === 0) return 0;
+    return height / width;
+  };
+
+  // Tính toán Eye Gaze (Hướng nhìn)
+  // Dựa trên logic Python: so sánh tâm mống mắt với tâm mắt
+  const calculateGazeShift = (landmarks) => {
+    // Landmarks mắt phải (Right Eye)
+    const rightIris = {
+      x: (landmarks[471].x + landmarks[469].x) / 2,
+      y: (landmarks[471].y + landmarks[469].y) / 2,
+    };
+    const rightEyeCenter = {
+      x: (landmarks[33].x + landmarks[133].x) / 2,
+      y: (landmarks[33].y + landmarks[133].y) / 2,
+    };
+    const rightEyeWidth = Math.abs(landmarks[33].x - landmarks[133].x);
+
+    // Landmarks mắt trái (Left Eye)
+    const leftIris = {
+      x: (landmarks[476].x + landmarks[474].x) / 2,
+      y: (landmarks[476].y + landmarks[474].y) / 2,
+    };
+    const leftEyeCenter = {
+      x: (landmarks[362].x + landmarks[263].x) / 2,
+      y: (landmarks[362].y + landmarks[263].y) / 2,
+    };
+    const leftEyeWidth = Math.abs(landmarks[362].x - landmarks[263].x);
+
+    // Tính độ lệch (Gaze Relative)
+    const rightGaze = getDistance(rightIris, rightEyeCenter) / rightEyeWidth;
+    const leftGaze = getDistance(leftIris, leftEyeCenter) / leftEyeWidth;
+
+    return (rightGaze + leftGaze) / 2;
+  };
 
   useEffect(() => {
     let currentStream = null;
@@ -35,24 +92,24 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       try {
         // Truy cập camera trực tiếp từ browser
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { 
+          video: {
             width: { ideal: 1280 },
             height: { ideal: 720 },
-            facingMode: "user"
-          }, 
-          audio: false 
+            facingMode: "user",
+          },
+          audio: false,
         });
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           currentStream = stream;
           setStreamActive(true);
-          
+
           // Start continuous drawing loop for video
           videoRef.current.onloadedmetadata = () => {
             startDrawingLoop();
           };
-          
+
           // Initialize MediaPipe FaceMesh and Hands
           initializeMediaPipe();
         }
@@ -64,27 +121,27 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
 
     const initializeMediaPipe = async () => {
       try {
-        console.log('🔧 Initializing MediaPipe models...');
-        
+        console.log("🔧 Initializing MediaPipe models...");
+
         // Initialize FaceMesh
         const faceMesh = new FaceMesh({
           locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-          }
+          },
         });
 
         faceMesh.setOptions({
           maxNumFaces: 1,
           refineLandmarks: true,
           minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          minTrackingConfidence: 0.5,
         });
 
         faceMesh.onResults((results) => {
           resultsRef.current.face = results;
           // Mark model as ready on first results
           if (!modelsReady.current.faceMesh) {
-            console.log('✅ FaceMesh ready');
+            console.log("✅ FaceMesh ready");
             modelsReady.current.faceMesh = true;
           }
         });
@@ -94,29 +151,29 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         const hands = new Hands({
           locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-          }
+          },
         });
 
         hands.setOptions({
           maxNumHands: 2,
           modelComplexity: 1,
           minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          minTrackingConfidence: 0.5,
         });
 
         hands.onResults((results) => {
           resultsRef.current.hands = results;
           // Mark model as ready on first results
           if (!modelsReady.current.hands) {
-            console.log('✅ Hands ready');
+            console.log("✅ Hands ready");
             modelsReady.current.hands = true;
           }
         });
         handsRef.current = hands;
 
         // Wait for models to fully initialize before starting camera
-        console.log('⏳ Waiting for MediaPipe WASM modules to load...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log("⏳ Waiting for MediaPipe WASM modules to load...");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
 
         // Start camera processing
         if (videoRef.current) {
@@ -129,32 +186,39 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
                   await handsRef.current.send({ image: videoRef.current });
                 } catch (err) {
                   // Silently handle initialization errors
-                  if (!modelsReady.current.faceMesh || !modelsReady.current.hands) {
+                  if (
+                    !modelsReady.current.faceMesh ||
+                    !modelsReady.current.hands
+                  ) {
                     // Still initializing, suppress errors
                     return;
                   }
-                  console.error('Frame processing error:', err);
+                  console.error("Frame processing error:", err);
                 }
               }
             },
             width: 1280,
-            height: 720
+            height: 720,
           });
-          
-          console.log('🎥 Starting MediaPipe camera feed...');
+
+          console.log("🎥 Starting MediaPipe camera feed...");
           camera.start();
           cameraRef.current = camera;
         }
       } catch (err) {
-        console.error('MediaPipe initialization error:', err);
-        setError('Failed to initialize MediaPipe. Please refresh the page.');
+        console.error("MediaPipe initialization error:", err);
+        setError("Failed to initialize MediaPipe. Please refresh the page.");
       }
     };
 
     // Continuous drawing loop for video + landmarks
     const startDrawingLoop = () => {
       const draw = () => {
-        if (videoRef.current && canvasRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+        if (
+          videoRef.current &&
+          canvasRef.current &&
+          videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA
+        ) {
           drawResults();
         }
         requestAnimationFrame(draw);
@@ -192,19 +256,21 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     // Helper: Check hand-to-face contact
     const checkHandToFace = (handLandmarks, faceLandmarks) => {
       if (!handLandmarks || !faceLandmarks) return false;
-      
+
       // Check key finger points (thumb tip=4, index tip=8, pinky tip=20)
       const fingerTips = [4, 8, 20];
-      
+
       // Get face bounding region from FACEMESH_FACE_OVAL
-      const facePoints = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
-                          397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
-                          172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
-      
+      const facePoints = [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365,
+        379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234,
+        127, 162, 21, 54, 103, 67, 109,
+      ];
+
       for (const handLandmark of handLandmarks) {
         for (const fingerIdx of fingerTips) {
           const finger = handLandmark[fingerIdx];
-          
+
           // Check distance to any face point
           for (const faceIdx of facePoints) {
             const facePoint = faceLandmarks[faceIdx];
@@ -212,7 +278,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
               finger.x - facePoint.x,
               finger.y - facePoint.y
             );
-            
+
             if (distance < HAND_FACE_DISTANCE_THRESHOLD) {
               return true;
             }
@@ -225,31 +291,48 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     // Calculate metrics from current landmarks
     const calculateMetrics = () => {
       frameCountRef.current++;
-      
+
       let blink = false;
       let handToFace = false;
-      
+      let lipCompression = false;
+      let gazeShift = 0;
+
       // Blink detection
-      if (resultsRef.current.face && resultsRef.current.face.multiFaceLandmarks) {
+      if (
+        resultsRef.current.face &&
+        resultsRef.current.face.multiFaceLandmarks
+      ) {
         const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
         blink = isBlinking(landmarks);
+        // 2. Lip Compression Detection
+        // Ngưỡng 0.35
+        const lipRatio = calculateLipRatio(landmarks);
+        if (lipRatio < 0.35) {
+          lipCompression = true;
+        }
+
+        // Gaze Shift Detection
+        gazeShift = calculateGazeShift(landmarks);
       }
-      
+
       // Hand-to-face detection
-      if (resultsRef.current.face && resultsRef.current.hands &&
-          resultsRef.current.face.multiFaceLandmarks &&
-          resultsRef.current.hands.multiHandLandmarks) {
+      if (
+        resultsRef.current.face &&
+        resultsRef.current.hands &&
+        resultsRef.current.face.multiFaceLandmarks &&
+        resultsRef.current.hands.multiHandLandmarks
+      ) {
         const faceLandmarks = resultsRef.current.face.multiFaceLandmarks[0];
         handToFace = checkHandToFace(
           resultsRef.current.hands.multiHandLandmarks,
           faceLandmarks
         );
       }
-      
+
       // Update buffers
       blinksBuffer.current.push(blink);
       handToFaceBuffer.current.push(handToFace);
-      
+
       // Keep buffer size limited
       if (blinksBuffer.current.length > MAX_FRAMES) {
         blinksBuffer.current.shift();
@@ -257,23 +340,29 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       if (handToFaceBuffer.current.length > MAX_FRAMES) {
         handToFaceBuffer.current.shift();
       }
-      
+
       // Calculate and emit metrics every 30 frames (1 second at 30fps)
       if (frameCountRef.current % 30 === 0 && onMetricsUpdate) {
-        const blinkCount = blinksBuffer.current.filter(b => b).length;
-        const handToFaceCount = handToFaceBuffer.current.filter(h => h).length;
-        
+        const blinkCount = blinksBuffer.current.filter((b) => b).length;
+        const handToFaceCount = handToFaceBuffer.current.filter(
+          (h) => h
+        ).length;
+
         // Calculate per minute rates
         const secondsRecorded = blinksBuffer.current.length / 30;
-        const blinkRate = secondsRecorded > 0 ? (blinkCount / secondsRecorded) * 60 : 0;
-        const handToFaceFreq = secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
-        
+        const blinkRate =
+          secondsRecorded > 0 ? (blinkCount / secondsRecorded) * 60 : 0;
+        const handToFaceFreq =
+          secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
+
         onMetricsUpdate({
           blinkRate: Math.round(blinkRate),
           handToFaceFrequency: Math.round(handToFaceFreq * 10) / 10,
           currentBlink: blink,
           currentHandToFace: handToFace,
-          frameCount: frameCountRef.current
+          isLipCompressed: lipCompression, // True/False
+          gazeShiftIntensity: gazeShift, // Float (độ lớn của việc đảo mắt)
+          frameCount: frameCountRef.current,
         });
       }
     };
@@ -282,17 +371,20 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       if (!canvasRef.current || !videoRef.current) return;
 
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      
+      const ctx = canvas.getContext("2d");
+
       // Set canvas size to match video
-      if (canvas.width !== videoRef.current.videoWidth || canvas.height !== videoRef.current.videoHeight) {
+      if (
+        canvas.width !== videoRef.current.videoWidth ||
+        canvas.height !== videoRef.current.videoHeight
+      ) {
         canvas.width = videoRef.current.videoWidth;
         canvas.height = videoRef.current.videoHeight;
       }
 
       // Save context state
       ctx.save();
-      
+
       // Clear canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -302,66 +394,72 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       }
 
       // Draw face landmarks
-      if (resultsRef.current.face && resultsRef.current.face.multiFaceLandmarks) {
+      if (
+        resultsRef.current.face &&
+        resultsRef.current.face.multiFaceLandmarks
+      ) {
         for (const landmarks of resultsRef.current.face.multiFaceLandmarks) {
           // Draw face mesh tesselation (lưới khuôn mặt)
           drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {
-            color: '#C0C0C070',
-            lineWidth: 0.5
+            color: "#C0C0C070",
+            lineWidth: 0.5,
           });
-          
+
           // Draw face oval (đường viền mặt)
           drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL, {
-            color: '#E0E0E0',
-            lineWidth: 1
+            color: "#E0E0E0",
+            lineWidth: 1,
           });
-          
+
           // Draw eyes (mắt)
           drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE, {
-            color: '#FF3030',
-            lineWidth: 1
+            color: "#FF3030",
+            lineWidth: 1,
           });
           drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE, {
-            color: '#30FF30',
-            lineWidth: 1
+            color: "#30FF30",
+            lineWidth: 1,
           });
-          
+
           // Draw lips (môi)
           drawConnectors(ctx, landmarks, FACEMESH_LIPS, {
-            color: '#E0E0E0',
-            lineWidth: 1
+            color: "#E0E0E0",
+            lineWidth: 1,
           });
         }
       }
 
       // Draw hand landmarks
-      if (resultsRef.current.hands && resultsRef.current.hands.multiHandLandmarks) {
+      if (
+        resultsRef.current.hands &&
+        resultsRef.current.hands.multiHandLandmarks
+      ) {
         for (const landmarks of resultsRef.current.hands.multiHandLandmarks) {
           // Draw hand connections (đường nối ngón tay)
           drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
-            color: '#00FF00',
-            lineWidth: 2
+            color: "#00FF00",
+            lineWidth: 2,
           });
-          
+
           // Draw hand landmarks (các điểm trên bàn tay)
           drawLandmarks(ctx, landmarks, {
-            color: '#FF0000',
+            color: "#FF0000",
             lineWidth: 1,
-            radius: 3
+            radius: 3,
           });
         }
       }
-      
+
       // Restore context state
       ctx.restore();
-      
+
       // Calculate metrics from landmarks (with error handling)
       try {
         if (modelsReady.current.faceMesh && modelsReady.current.hands) {
           calculateMetrics();
         }
       } catch (err) {
-        console.error('Error calculating metrics:', err);
+        console.error("Error calculating metrics:", err);
       }
     };
 
@@ -369,7 +467,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
 
     return () => {
       if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
+        currentStream.getTracks().forEach((track) => track.stop());
       }
       if (cameraRef.current) {
         cameraRef.current.stop();
@@ -395,13 +493,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         )}
 
         {/* Video element - direct camera feed (hidden, used for processing) */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="hidden"
-        />
+        <video ref={videoRef} autoPlay playsInline muted className="hidden" />
 
         {/* Canvas overlay - displays video + landmarks */}
         <canvas
@@ -411,8 +503,8 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
 
         {/* Status overlay */}
         <div className="absolute bottom-2 left-2 text-xs text-gray-300 bg-black/50 px-2 py-1 rounded z-10">
-          <span className={calibrated ? 'text-green-400' : 'text-yellow-400'}>
-            {calibrated ? '● ANALYZING' : '● CALIBRATING'}
+          <span className={calibrated ? "text-green-400" : "text-yellow-400"}>
+            {calibrated ? "● ANALYZING" : "● CALIBRATING"}
           </span>
         </div>
       </div>
