@@ -274,14 +274,23 @@ def play_webcam(draw_landmarks=False, enable_recording=False, enable_chart=False
         
         # PHASE 5: Timestamp-based file naming như yêu cầu
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        filename = os.path.join(recordings_dir, f"interrogation_{timestamp}.avi")
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        recording = cv2.VideoWriter(filename, fourcc, 10, (1280, 720))
+        filename = os.path.join(recordings_dir, f"interrogation_{timestamp}.mp4")
+        
+        # Use MP4 with H.264 codec for browser compatibility
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MPEG-4 codec
+        recording = cv2.VideoWriter(filename, fourcc, 20, (1280, 720))
+        
+        if not recording.isOpened():
+            print("⚠️ Failed to create video writer with mp4v, trying avc1...")
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 fallback
+            recording = cv2.VideoWriter(filename, fourcc, 20, (1280, 720))
+        
         if review_session:
             review_session.video_file = filename
-            review_session.fps = 10
+            review_session.fps = 20
             
         print(f"🎬 PHASE 5 RECORDING: {filename}")
+        print(f"📹 Codec: mp4v | FPS: 20 | Resolution: 1280x720")
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh, \
          mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:

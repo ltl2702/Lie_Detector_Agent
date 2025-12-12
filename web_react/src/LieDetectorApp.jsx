@@ -61,12 +61,76 @@ export default function LieDetectorApp() {
   // Refs
   const wsRef = useRef(null);
   const pollingRef = useRef(null);
+  const recordedVideoRef = useRef(null);
+  const [shouldStopRecording, setShouldStopRecording] = useState(false);
+  const videoRecordedPromiseRef = useRef(null);
+  
+  // Handle video recorded from camera
+  const handleVideoRecorded = (videoBlob) => {
+    recordedVideoRef.current = videoBlob;
+    console.log('📹 Video recorded, size:', videoBlob.size);
+    
+    // Resolve promise if waiting
+    if (videoRecordedPromiseRef.current) {
+      videoRecordedPromiseRef.current.resolve(videoBlob);
+      videoRecordedPromiseRef.current = null;
+    }
+  };
   
   // Handle ending session
   const handleEndSession = async () => {
     if (!sessionId) return;
     
     try {
+      // First, stop recording and wait for video
+      console.log('🛑 Stopping recording...');
+      
+      // Create a promise that will resolve when video is recorded
+      const videoPromise = new Promise((resolve) => {
+        videoRecordedPromiseRef.current = { resolve };
+      });
+      
+      setShouldStopRecording(true);
+      
+      // Wait for video to be recorded (with timeout)
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => {
+        console.warn('⚠️ Video recording timeout');
+        resolve(null);
+      }, 5000));
+      
+      await Promise.race([videoPromise, timeoutPromise]);
+      
+      console.log('🛑 Ending session, video available:', !!recordedVideoRef.current);
+      
+      // Upload video first if available
+      let videoFilePath = null;
+      if (recordedVideoRef.current) {
+        console.log('📤 Uploading video...');
+        const formData = new FormData();
+        
+        // Use the correct file extension from the blob
+        const extension = recordedVideoRef.current.fileExtension || 'mp4';
+        const filename = `interrogation_${sessionId}.${extension}`;
+        
+        formData.append('video', recordedVideoRef.current, filename);
+        formData.append('session_id', sessionId);
+        
+        console.log(`📹 Uploading ${filename} (${recordedVideoRef.current.size} bytes)`);
+        
+        const uploadResponse = await fetch('http://localhost:5000/api/upload_video', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (uploadResponse.ok) {
+          const uploadData = await uploadResponse.json();
+          videoFilePath = uploadData.video_path;
+          console.log('✅ Video uploaded:', videoFilePath);
+        } else {
+          console.error('❌ Video upload failed');
+        }
+      }
+      
       // Save session data
       const sessionData = {
         session_id: sessionId,
@@ -79,7 +143,8 @@ export default function LieDetectorApp() {
           bpm: bpm,
           emotion: dominantEmotion,
           stress_level: stressLevel
-        }
+        },
+        video_file: videoFilePath
       };
       
       // Call backend to end session
@@ -97,6 +162,7 @@ export default function LieDetectorApp() {
         calibrated: false
       });
       setTells([]);
+      recordedVideoRef.current = null;
       
       // Disconnect websocket
       if (wsRef.current) {
@@ -613,7 +679,13 @@ export default function LieDetectorApp() {
             {/* Video Feed with Calibration Overlay */}
             <div className="relative">
               {cameraActive && sessionId ? (
-                <CameraFeed sessionId={sessionId} calibrated={baseline.calibrated} onMetricsUpdate={handleFrontendMetrics} />
+                <CameraFeed 
+                  sessionId={sessionId} 
+                  calibrated={baseline.calibrated} 
+                  onMetricsUpdate={handleFrontendMetrics}
+                  onVideoRecorded={handleVideoRecorded}
+                  shouldStopRecording={shouldStopRecording}
+                />
               ) : (
                 <div className="bg-gray-800 rounded-lg overflow-hidden relative">
                   <div className="aspect-video bg-gray-700 flex items-center justify-center relative">

@@ -47,68 +47,23 @@ class DetectionSession:
         self.frame_count = 0
         self.emotion_detector = None
         self.cap = None  # Camera capture object
+        self.video_writer = None  # Video recording object
+        self.video_file = None  # Path to recorded video
         
     def start_camera_capture(self):
-        """Start camera capture thread"""
-        global current_frame, current_frame_lock
-        
-        if self.camera_thread and self.camera_thread.is_alive():
-            return  # Already running
-        
-        def capture_frames():
-            global current_frame, current_frame_lock
-            
-            # Try multiple methods to open camera
-            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-            if not self.cap.isOpened():
-                self.cap = cv2.VideoCapture(0)
-            
-            if not self.cap.isOpened():
-                print(f"❌ Cannot open camera for session {self.session_id}")
-                print("Available cameras might be in use or not available")
-                return
-            
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-            
-            print(f"✅ Camera opened successfully for session {self.session_id}")
-            
-            frame_count = 0
-            while self.camera_running:
-                ret, frame = self.cap.read()
-                if not ret:
-                    print(f"⚠️ Failed to read frame from camera")
-                    break
-                
-                frame = cv2.flip(frame, 1)
-                frame_count += 1
-                self.frame_count = frame_count
-                
-                # Store current frame thread-safely
-                with current_frame_lock:
-                    current_frame = frame
-                
-                # Log every 30 frames
-                if frame_count % 30 == 0:
-                    print(f"📹 Captured {frame_count} frames")
-            
-            if self.cap:
-                self.cap.release()
-            print(f"🎬 Camera stopped for session {self.session_id} ({frame_count} total frames)")
-        
-        
+        """DISABLED: Camera is managed by frontend, not backend"""
+        # Frontend handles camera via getUserMedia()
+        # Backend will receive frames through API if needed
+        print(f"⚠️ Camera capture disabled - frontend handles camera")
+        print(f"💡 Video recording can be added by capturing canvas frames from frontend")
         self.camera_running = True
-        self.camera_thread = threading.Thread(target=capture_frames, daemon=True)
-        self.camera_thread.start()
+        # No actual camera capture thread
     
     def stop_camera_capture(self):
         """Stop camera capture thread"""
+        print(f"🛑 Stopping camera for session {self.session_id}...")
         self.camera_running = False
-        if self.camera_thread:
-            self.camera_thread.join(timeout=2)
-        if self.cap:
-            self.cap.release()
+        print(f"✅ Camera stopped for session {self.session_id}")
         
     def to_dict(self):
         return {
@@ -118,7 +73,8 @@ class DetectionSession:
             'calibrated': self.calibrated,
             'metrics': self.metrics,
             'tells': self.tells,
-            'frame_count': self.frame_count
+            'frame_count': self.frame_count,
+            'video_file': self.video_file
         }
 
 # Routes
@@ -138,6 +94,9 @@ def start_session():
         session = DetectionSession(session_id)
         sessions[session_id] = session
         
+        # Start camera immediately to begin recording
+        session.start_camera_capture()
+        
         print(f"🎬 Started new session: {session_id}")
         
         return jsonify({
@@ -151,6 +110,50 @@ def start_session():
             'status': 'error',
             'message': str(e)
         }), 400
+
+@app.route('/api/upload_video', methods=['POST'])
+def upload_video():
+    """Upload recorded video from frontend"""
+    try:
+        if 'video' not in request.files:
+            return jsonify({
+                'status': 'error',
+                'message': 'No video file provided'
+            }), 400
+        
+        video_file = request.files['video']
+        session_id = request.form.get('session_id', 'unknown')
+        
+        # Get original filename and extension
+        original_filename = video_file.filename
+        file_extension = original_filename.rsplit('.', 1)[1] if '.' in original_filename else 'mp4'
+        
+        # Create recordings directory
+        recordings_dir = Path(__file__).parent.parent / 'recordings'
+        recordings_dir.mkdir(exist_ok=True)
+        
+        # Save video with timestamp and correct extension
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        filename = f"interrogation_{timestamp}.{file_extension}"
+        video_path = recordings_dir / filename
+        
+        video_file.save(str(video_path))
+        
+        print(f"📹 Video uploaded: {video_path} ({video_path.stat().st_size} bytes, format: {file_extension})")
+        
+        return jsonify({
+            'status': 'success',
+            'video_path': str(video_path),
+            'filename': filename
+        }), 200
+    except Exception as e:
+        print(f"Error uploading video: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/api/session/<session_id>/end', methods=['POST'])
 def end_session(session_id):
@@ -175,7 +178,7 @@ def end_session(session_id):
                 'tells': request_data.get('tells', session.tells),
                 'metrics': request_data.get('metrics', session.metrics),
                 'frame_count': session.frame_count,
-                'fps': 30,
+                'fps': 20,
                 'events': [
                     {
                         'timestamp': tell.get('timestamp', 0),
@@ -183,7 +186,7 @@ def end_session(session_id):
                         'message': tell.get('message', '')
                     } for tell in session.tells
                 ] if session.tells else [],
-                'video_file': None
+                'video_file': request_data.get('video_file', session.video_file)
             }
             
             # Save to sessions directory
@@ -673,8 +676,21 @@ def serve_video(video_path):
                 'message': f'Video file not found: {video_file}'
             }), 404
         
+        # Convert AVI to MP4 if needed - remove conversion logic
+        # Browser will handle AVI directly or show error
+        
         # Get file size
         file_size = os.path.getsize(video_file)
+        
+        # Determine MIME type
+        if str(video_file).endswith('.mp4'):
+            mime_type = 'video/mp4'
+        elif str(video_file).endswith('.webm'):
+            mime_type = 'video/webm'
+        elif str(video_file).endswith('.avi'):
+            mime_type = 'video/x-msvideo'
+        else:
+            mime_type = 'application/octet-stream'
         
         # Check for range header (for video seeking)
         range_header = request.headers.get('Range', None)
@@ -706,7 +722,7 @@ def serve_video(video_path):
             response = Response(
                 stream_with_context(generate()),
                 status=206,
-                mimetype='video/x-msvideo',
+                mimetype=mime_type,
                 direct_passthrough=True
             )
             response.headers.add('Content-Range', f'bytes {byte_start}-{byte_end}/{file_size}')
@@ -717,7 +733,7 @@ def serve_video(video_path):
             # Serve entire file
             return send_file(
                 str(video_file),
-                mimetype='video/x-msvideo',
+                mimetype=mime_type,
                 as_attachment=False,
                 conditional=True
             )

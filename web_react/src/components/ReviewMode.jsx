@@ -11,12 +11,14 @@ export default function ReviewMode({ sessionData, onClose }) {
   const [videoLoaded, setVideoLoaded] = useState(false);
   const videoRef = React.useRef(null);
 
-  // Use video duration if available, otherwise fall back to events duration
-  const duration = videoDuration > 0 
+  // Use video duration if available, otherwise calculate from session times
+  const duration = videoDuration > 0 && isFinite(videoDuration)
     ? videoDuration 
-    : (sessionData?.events?.length > 0 
-      ? sessionData.events[sessionData.events.length - 1].timestamp 
-      : 0);
+    : (sessionData?.end_time && sessionData?.start_time)
+      ? (sessionData.end_time - sessionData.start_time)
+      : (sessionData?.events?.length > 0 
+        ? sessionData.events[sessionData.events.length - 1].timestamp 
+        : 0);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -43,15 +45,46 @@ export default function ReviewMode({ sessionData, onClose }) {
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      setVideoDuration(videoRef.current.duration);
+      const dur = videoRef.current.duration;
+      console.log('Video loaded, duration:', dur, 'isFinite:', isFinite(dur));
+      if (isFinite(dur) && dur > 0) {
+        setVideoDuration(dur);
+      } else {
+        console.warn('⚠️ Video duration is invalid, using session time');
+        // Calculate from session data
+        const calculatedDuration = sessionData?.end_time && sessionData?.start_time
+          ? (sessionData.end_time - sessionData.start_time)
+          : 60; // Default to 60 seconds if unknown
+        setVideoDuration(calculatedDuration);
+      }
       setVideoLoaded(true);
-      console.log('Video loaded, duration:', videoRef.current.duration);
     }
   };
 
   const handleVideoError = (e) => {
     console.error('Video error:', e);
-    setVideoError('Failed to load video');
+    const errorDetails = {
+      target: e.target?.tagName,
+      src: e.target?.src || e.target?.currentSrc,
+      error: videoRef.current?.error,
+      errorCode: videoRef.current?.error?.code,
+      errorMessage: videoRef.current?.error?.message,
+      networkState: videoRef.current?.networkState,
+      readyState: videoRef.current?.readyState
+    };
+    console.error('Video error details:', errorDetails);
+    
+    // Provide user-friendly error message based on error code
+    let errorMsg = 'Failed to load video';
+    if (videoRef.current?.error?.code === 4) {
+      errorMsg = 'Video format not supported by browser. Try opening in VLC player.';
+    } else if (videoRef.current?.error?.code === 3) {
+      errorMsg = 'Video file is corrupted or incomplete';
+    } else if (videoRef.current?.error?.code === 2) {
+      errorMsg = 'Network error loading video';
+    }
+    
+    setVideoError(errorMsg);
     setVideoLoaded(false);
   };
 
@@ -113,17 +146,14 @@ export default function ReviewMode({ sessionData, onClose }) {
                 <>
                   <video
                     ref={videoRef}
+                    src={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`}
                     className="max-w-full max-h-full"
                     onTimeUpdate={handleTimeUpdate}
                     onLoadedMetadata={handleLoadedMetadata}
                     onError={handleVideoError}
                     onEnded={() => setPlaying(false)}
                     controls={false}
-                  >
-                    <source src={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`} type="video/x-msvideo" />
-                    <source src={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`} type="video/mp4" />
-                    Your browser does not support video playback.
-                  </video>
+                  />
                   {!videoLoaded && !videoError && (
                     <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75">
                       <div className="text-center">
@@ -135,10 +165,28 @@ export default function ReviewMode({ sessionData, onClose }) {
                   )}
                   {videoError && (
                     <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75">
-                      <div className="text-center">
+                      <div className="text-center max-w-lg">
                         <Clock className="w-16 h-16 mx-auto mb-2 text-red-500" />
-                        <p className="text-red-400">{videoError}</p>
-                        <p className="text-xs text-gray-500 mt-1 max-w-md truncate px-4">{sessionData.video_file}</p>
+                        <p className="text-red-400 mb-2">{videoError}</p>
+                        <p className="text-xs text-gray-500 mb-4 max-w-md truncate px-4">{sessionData.video_file}</p>
+                        <div className="flex gap-2 justify-center">
+                          <a
+                            href={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`}
+                            download
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm transition"
+                          >
+                            📥 Download Video
+                          </a>
+                          <button
+                            onClick={() => window.open(`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`, '_blank')}
+                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white text-sm transition"
+                          >
+                            🔗 Open in New Tab
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-3">
+                          💡 Tip: Try opening with VLC Media Player
+                        </p>
                       </div>
                     </div>
                   )}

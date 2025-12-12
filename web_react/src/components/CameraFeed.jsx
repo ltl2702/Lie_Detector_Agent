@@ -11,7 +11,7 @@ const EYE_BLINK_THRESHOLD = 0.15;
 const MAX_FRAMES = 120; // 4 seconds at 30fps
 const HAND_FACE_DISTANCE_THRESHOLD = 0.05;
 
-export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
+export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate, onVideoRecorded, shouldStopRecording }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [error, setError] = useState(null);
@@ -21,18 +21,56 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const cameraRef = useRef(null);
   const resultsRef = useRef({ face: null, hands: null });
   const modelsReady = useRef({ faceMesh: false, hands: false });
+  const initializingRef = useRef(false); // Prevent double initialization
+  
+  // Video recording
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const [recordingStopped, setRecordingStopped] = useState(false);
   
   // Metrics tracking
   const blinksBuffer = useRef([]);
   const handToFaceBuffer = useRef([]);
   const gazeBuffer = useRef([]);
   const frameCountRef = useRef(0);
+  
+  // Event alerts tracking for video overlay
+  const [activeAlerts, setActiveAlerts] = useState([]);
+  const alertHistoryRef = useRef([]);
+
+  // Effect to stop recording when requested
+  useEffect(() => {
+    if (shouldStopRecording && mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      console.log('⏹️ Stopping recording on request...');
+      const recorder = mediaRecorderRef.current;
+      
+      // Request final data before stopping
+      if (recorder.state === 'recording') {
+        recorder.requestData(); // Flush any remaining data
+        setTimeout(() => {
+          recorder.stop();
+          setRecordingStopped(true);
+        }, 100); // Small delay to ensure data is collected
+      } else {
+        recorder.stop();
+        setRecordingStopped(true);
+      }
+    }
+  }, [shouldStopRecording]);
 
   useEffect(() => {
     let currentStream = null;
 
     const startCamera = async () => {
+      // Prevent double initialization
+      if (initializingRef.current) {
+        console.log('⏸️ Already initializing, skipping...');
+        return;
+      }
+      initializingRef.current = true;
+      
       try {
+        console.log('🚀 Starting camera initialization...');
         // Truy cập camera trực tiếp từ browser
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { 
@@ -51,14 +89,99 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           // Start continuous drawing loop for video
           videoRef.current.onloadedmetadata = () => {
             startDrawingLoop();
+            // Start recording canvas immediately when video is ready
+            setTimeout(() => {
+              if (canvasRef.current && !mediaRecorderRef.current) {
+                startRecording();
+              }
+            }, 500); // Reduced from 1000ms
           };
           
-          // Initialize MediaPipe FaceMesh and Hands
-          initializeMediaPipe();
+          // Initialize MediaPipe FaceMesh and Hands (only once)
+          if (!faceMeshRef.current && !handsRef.current) {
+            initializeMediaPipe();
+          }
         }
       } catch (err) {
         console.error("Camera error:", err);
         setError("Cannot access camera. Please allow camera permission!");
+        initializingRef.current = false; // Reset on error
+      }
+    };
+
+    const startRecording = () => {
+      try {
+        // Record canvas stream (includes video + landmarks + alerts)
+        if (!canvasRef.current) {
+          console.error('❌ Canvas not ready for recording');
+          return;
+        }
+        
+        const canvasStream = canvasRef.current.captureStream(30); // 30 FPS
+        
+        // Try codecs in order - VP9/VP8 are better for browser playback
+        const codecOptions = [
+          'video/webm;codecs=vp9',        // WebM VP9 - best quality + playback
+          'video/webm;codecs=vp8',        // WebM VP8 - good compatibility
+          'video/webm;codecs=vp9,opus',   // VP9 with audio support
+          'video/webm;codecs=vp8,opus',   // VP8 with audio support
+          'video/mp4;codecs=avc1.42E01E', // MP4 fallback
+          'video/webm',                   // Generic WebM
+          'video/mp4'                     // Generic MP4
+        ];
+        
+        let selectedOptions = { mimeType: 'video/webm' };
+        let selectedExtension = 'webm'; // WebM is better for browser playback
+        
+        for (const codec of codecOptions) {
+          if (MediaRecorder.isTypeSupported(codec)) {
+            selectedOptions.mimeType = codec;
+            // Use WebM extension for WebM codecs, MP4 for MP4 codecs
+            selectedExtension = codec.startsWith('video/mp4') ? 'mp4' : 'webm';
+            console.log('🎬 Recording canvas with codec:', codec, '→', selectedExtension);
+            break;
+          }
+        }
+        
+        const mediaRecorder = new MediaRecorder(canvasStream, selectedOptions);
+        recordedChunksRef.current = [];
+        
+        // Store extension for later use
+        mediaRecorder.fileExtension = selectedExtension;
+        
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            recordedChunksRef.current.push(event.data);
+          }
+        };
+        
+        mediaRecorder.onstop = () => {
+          // Use correct MIME type and extension
+          const mimeType = mediaRecorder.mimeType || selectedOptions.mimeType;
+          const extension = mediaRecorder.fileExtension || selectedExtension;
+          const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+          
+          // Add extension property to blob for filename
+          blob.fileExtension = extension;
+          
+          console.log(`🎬 Canvas recording stopped: ${blob.size} bytes, ${mimeType} (${extension})`);
+          console.log(`📊 Recorded ${alertHistoryRef.current.length} alert events`);
+          if (onVideoRecorded && blob.size > 0) {
+            onVideoRecorded(blob);
+          } else {
+            console.warn('⚠️ Video blob is empty!');
+          }
+        };
+        
+        mediaRecorder.onerror = (event) => {
+          console.error('❌ MediaRecorder error:', event.error);
+        };
+        
+        mediaRecorder.start(100); // Collect data every 100ms for smoother recording
+        mediaRecorderRef.current = mediaRecorder;
+        console.log('🔴 Recording started with', selectedOptions.mimeType);
+      } catch (err) {
+        console.error('Failed to start recording:', err);
       }
     };
 
@@ -84,8 +207,9 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           resultsRef.current.face = results;
           // Mark model as ready on first results
           if (!modelsReady.current.faceMesh) {
-            console.log('✅ FaceMesh ready');
+            console.log('✅ FaceMesh initialized and ready');
             modelsReady.current.faceMesh = true;
+            checkAllModelsReady();
           }
         });
         faceMeshRef.current = faceMesh;
@@ -108,17 +232,22 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           resultsRef.current.hands = results;
           // Mark model as ready on first results
           if (!modelsReady.current.hands) {
-            console.log('✅ Hands ready');
+            console.log('✅ Hands initialized and ready');
             modelsReady.current.hands = true;
+            checkAllModelsReady();
           }
         });
         handsRef.current = hands;
+        
+        // Helper function to check if all models are ready
+        const checkAllModelsReady = () => {
+          if (modelsReady.current.faceMesh && modelsReady.current.hands) {
+            console.log('🎉 All MediaPipe models ready!');
+          }
+        };
 
-        // Wait for models to fully initialize before starting camera
-        console.log('⏳ Waiting for MediaPipe WASM modules to load...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Start camera processing
+        // Start camera processing immediately (no wait)
+        // Models will initialize in background
         if (videoRef.current) {
           const camera = new Camera(videoRef.current, {
             onFrame: async () => {
@@ -146,8 +275,9 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           cameraRef.current = camera;
         }
       } catch (err) {
-        console.error('MediaPipe initialization error:', err);
+        console.error('❌ MediaPipe initialization error:', err);
         setError('Failed to initialize MediaPipe. Please refresh the page.');
+        initializingRef.current = false; // Reset on error
       }
     };
 
@@ -228,11 +358,21 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       
       let blink = false;
       let handToFace = false;
+      const newAlerts = [];
       
       // Blink detection
       if (resultsRef.current.face && resultsRef.current.face.multiFaceLandmarks) {
         const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
         blink = isBlinking(landmarks);
+        
+        if (blink) {
+          newAlerts.push({
+            type: 'blink',
+            message: '👁️ Rapid Blinking',
+            color: '#FFA500',
+            timestamp: Date.now()
+          });
+        }
       }
       
       // Hand-to-face detection
@@ -244,6 +384,28 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           resultsRef.current.hands.multiHandLandmarks,
           faceLandmarks
         );
+        
+        if (handToFace) {
+          newAlerts.push({
+            type: 'hand-to-face',
+            message: '✋ Hand Near Face',
+            color: '#FF6B6B',
+            timestamp: Date.now()
+          });
+        }
+      }
+      
+      // Update active alerts
+      if (newAlerts.length > 0) {
+        setActiveAlerts(newAlerts);
+        alertHistoryRef.current.push(...newAlerts);
+        
+        // Keep history reasonable size
+        if (alertHistoryRef.current.length > 1000) {
+          alertHistoryRef.current = alertHistoryRef.current.slice(-500);
+        }
+      } else {
+        setActiveAlerts([]);
       }
       
       // Update buffers
@@ -276,6 +438,64 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           frameCount: frameCountRef.current
         });
       }
+    };
+
+    // Draw alerts overlay on canvas
+    const drawAlerts = (ctx, width, height) => {
+      if (activeAlerts.length === 0) return;
+      
+      ctx.save();
+      
+      // Polyfill for roundRect if not supported
+      if (!ctx.roundRect) {
+        ctx.roundRect = function(x, y, w, h, r) {
+          this.beginPath();
+          this.moveTo(x + r, y);
+          this.lineTo(x + w - r, y);
+          this.quadraticCurveTo(x + w, y, x + w, y + r);
+          this.lineTo(x + w, y + h - r);
+          this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+          this.lineTo(x + r, y + h);
+          this.quadraticCurveTo(x, y + h, x, y + h - r);
+          this.lineTo(x, y + r);
+          this.quadraticCurveTo(x, y, x + r, y);
+          this.closePath();
+        };
+      }
+      
+      // Draw each alert
+      activeAlerts.forEach((alert, index) => {
+        const y = 50 + (index * 40);
+        const x = 20;
+        
+        // Draw alert background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.roundRect(x, y, 250, 35, 8);
+        ctx.fill();
+        
+        // Draw alert border
+        ctx.strokeStyle = alert.color;
+        ctx.lineWidth = 2;
+        ctx.roundRect(x, y, 250, 35, 8);
+        ctx.stroke();
+        
+        // Draw alert text
+        ctx.fillStyle = alert.color;
+        ctx.font = 'bold 16px Arial';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(alert.message, x + 10, y + 17);
+        
+        // Draw pulse animation
+        const age = Date.now() - alert.timestamp;
+        if (age < 500) {
+          const opacity = 1 - (age / 500);
+          ctx.fillStyle = `rgba(255, 255, 255, ${opacity * 0.3})`;
+          ctx.roundRect(x - 5, y - 5, 260, 45, 10);
+          ctx.fill();
+        }
+      });
+      
+      ctx.restore();
     };
 
     const drawResults = () => {
@@ -352,6 +572,9 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         }
       }
       
+      // Draw event alerts overlay
+      drawAlerts(ctx, canvas.width, canvas.height);
+      
       // Restore context state
       ctx.restore();
       
@@ -368,12 +591,28 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     startCamera();
 
     return () => {
+      console.log('🧹 Cleaning up camera and MediaPipe...');
+      // Stop recording
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      // Stop camera
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
       if (cameraRef.current) {
         cameraRef.current.stop();
       }
+      // Close MediaPipe models
+      if (faceMeshRef.current) {
+        faceMeshRef.current.close();
+      }
+      if (handsRef.current) {
+        handsRef.current.close();
+      }
+      // Reset initialization flag
+      initializingRef.current = false;
+      modelsReady.current = { faceMesh: false, hands: false };
     };
   }, []);
 
@@ -389,7 +628,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         {!streamActive && !error && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-gray-500 text-sm animate-pulse">
-              Accessing camera...
+              📷 Accessing camera...
             </div>
           </div>
         )}
