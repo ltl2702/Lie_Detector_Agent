@@ -4,5 +4,8 @@ src/__pycache__/
 *.log
 docs
 *.avi
-*.json
+sessions/
+memory/
 src/venv/
+*.mp4
+recordings/
