@@ -13,7 +13,7 @@ import {
 import { HAND_CONNECTIONS } from "@mediapipe/hands";
 
 // Constants for detection
-const EYE_BLINK_THRESHOLD = 0.4; // Eye Aspect Ratio threshold
+const EYE_BLINK_THRESHOLD = 0.42; // Eye Aspect Ratio threshold
 const MAX_FRAMES = 120; // 4 seconds at 30fps
 const HAND_FACE_DISTANCE_THRESHOLD = 0.05;
 
@@ -36,6 +36,9 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const totalHandTouches = useRef(0);
   // Ref để chứa danh sách thời điểm chớp mắt (dùng cho Sliding Window)
   const blinkTimestamps = useRef([]);
+
+  const lastBlinkTime = useRef(0);
+  const lastHandTouchTime = useRef(0);
 
   // Metrics tracking
   const blinksBuffer = useRef([]);
@@ -323,6 +326,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     // Calculate metrics from current landmarks
     const calculateMetrics = () => {
       frameCountRef.current++;
+      const now = Date.now(); // Lấy thời gian hiện tại
 
       // let blink = false;
       let handToFace = false;
@@ -376,28 +380,35 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         );
       }
 
-      const now = Date.now();
       // CẬP NHẬT TỔNG SỐ LẦN (COUNT) THAY VÌ BUFFER FRAME
       // Cập nhật tổng số lần nháy mắt
       if (isBlinkingNow && !prevBlinkState.current) {
-        totalBlinks.current += 1;
-        console.log("👁️ BLINK DETECTED! Total:", totalBlinks.current);
-        // Lưu thời điểm chớp mắt vào mảng
-        blinkTimestamps.current.push(now);
+        if (now - lastBlinkTime.current > 300) {
+          // Cooldown 300ms
+          totalBlinks.current += 1;
+          blinkTimestamps.current.push(now);
+          lastBlinkTime.current = now;
+          console.log("👁️ Valid Blink Detected! Total:", totalBlinks.current);
+        }
       }
       prevBlinkState.current = isBlinkingNow;
       // Lọc bỏ các lần chớp mắt đã quá 60 giây (60000ms)
       // Để tính rate chính xác trong 1 phút gần nhất
+      // Lọc bỏ các lần chớp quá 60s
       blinkTimestamps.current = blinkTimestamps.current.filter(
         (t) => now - t <= 60000
       );
+
       // Tính Rate hiện tại
       let currentBlinkRate = blinkTimestamps.current.length;
       const timeElapsedSeconds = frameCountRef.current / 30; // Giả sử 30fps
       if (timeElapsedSeconds < 60 && timeElapsedSeconds > 5) {
-        currentBlinkRate = Math.round(
-          (currentBlinkRate / timeElapsedSeconds) * 60
-        );
+        // Chỉ ước lượng nếu số lần blink > 1 để tránh nhảy số quá lớn khi mới vào
+        if (currentBlinkRate > 1) {
+          currentBlinkRate = Math.round(
+            (currentBlinkRate / timeElapsedSeconds) * 60
+          );
+        }
       }
       // Cập nhật tổng số lần chạm tay lên mặt
       if (isTouchingFaceNow && !prevHandState.current) {
@@ -448,10 +459,10 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           // blinkCount: totalBlinks.current, // Tổng số lần chớp từ đầu buổi
           // handToFaceFrequency: Math.round(handToFaceFreq * 10) / 10,
           // currentBlink: blink,
-          currentBlink: isBlinkingNow,
+          // currentBlink: isBlinkingNow,
           // currentHandToFace: handToFace,
           currentHandToFace: isTouchingFaceNow,
-          handToFaceCount: totalHandTouches.current, // Tổng số lần chạm tay lên mặt
+          // handToFaceCount: totalHandTouches.current, // Tổng số lần chạm tay lên mặt
           isLipCompressed: lipCompression, // True/False
           gazeShiftIntensity: gazeShift, // Float (độ lớn của việc đảo mắt)
           frameCount: frameCountRef.current,

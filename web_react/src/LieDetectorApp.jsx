@@ -652,8 +652,8 @@ export default function LieDetectorApp() {
                 <div className="flex items-center gap-2 text-sm bg-green-900 bg-opacity-30 px-3 py-1 rounded-lg border border-green-600">
                   <Target className="w-4 h-4 text-green-400" />
                   <span className="text-green-400">
-                    Baseline: {baseline.bpm.toFixed(1)} BPM |{" "}
-                    {baseline.blink_rate.toFixed(1)}/min
+                    Baseline: {baseline.bpm.toFixed(1)} BPM
+                    {/* {baseline.blink_rate.toFixed(1)}/min */}
                   </span>
                 </div>
                 <button
