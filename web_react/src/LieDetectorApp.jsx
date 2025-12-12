@@ -236,7 +236,7 @@ export default function LieDetectorApp() {
     });
 
     setHandMetrics({
-      count: metrics.handTouchCount,
+      count: metrics.handTouchTotal || 0,
       isTouching: metrics.currentHandToFace,
     });
 
@@ -1085,12 +1085,11 @@ export default function LieDetectorApp() {
                   </div>
                 </div>
 
-                {baseline.calibrated && (
+                {/* {baseline.calibrated && (
                   <div className="mt-3 text-xs text-gray-500 text-center">
-                    Calibration baseline:{" "}
-                    {(baseline.hand_face_frequency * 100).toFixed(1)}% activity
+                    Baseline: {baseline.hand_baseline_count} touches
                   </div>
-                )}
+                )} */}
               </div>
             </div>
           </div>

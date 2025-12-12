@@ -15,7 +15,7 @@ import { HAND_CONNECTIONS } from "@mediapipe/hands";
 // Constants for detection
 const EYE_BLINK_THRESHOLD = 0.42; // Eye Aspect Ratio threshold
 const MAX_FRAMES = 120; // 4 seconds at 30fps
-const HAND_FACE_DISTANCE_THRESHOLD = 0.05;
+const HAND_FACE_DISTANCE_THRESHOLD = 0.08;
 
 export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const videoRef = useRef(null);
@@ -370,10 +370,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         resultsRef.current.hands.multiHandLandmarks
       ) {
         const faceLandmarks = resultsRef.current.face.multiFaceLandmarks[0];
-        handToFace = checkHandToFace(
-          resultsRef.current.hands.multiHandLandmarks,
-          faceLandmarks
-        );
         isTouchingFaceNow = checkHandToFace(
           resultsRef.current.hands.multiHandLandmarks,
           faceLandmarks
@@ -412,8 +408,17 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       }
       // Cập nhật tổng số lần chạm tay lên mặt
       if (isTouchingFaceNow && !prevHandState.current) {
-        totalHandTouches.current += 1;
+        // Cooldown 2 giây để tránh đếm trùng 1 hành động
+        if (now - lastHandTouchTime.current > 2000) {
+          totalHandTouches.current += 1;
+          lastHandTouchTime.current = now;
+          console.log(
+            "✋ HAND TOUCH DETECTED! Total:",
+            totalHandTouches.current
+          );
+        }
       }
+      prevHandState.current = isTouchingFaceNow;
 
       // // Update buffers
       // blinksBuffer.current.push(blink);
@@ -461,6 +466,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           // currentBlink: blink,
           // currentBlink: isBlinkingNow,
           // currentHandToFace: handToFace,
+          handTouchTotal: totalHandTouches.current,
           currentHandToFace: isTouchingFaceNow,
           // handToFaceCount: totalHandTouches.current, // Tổng số lần chạm tay lên mặt
           isLipCompressed: lipCompression, // True/False
