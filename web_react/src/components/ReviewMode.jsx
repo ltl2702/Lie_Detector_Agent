@@ -11,12 +11,14 @@ export default function ReviewMode({ sessionData, onClose }) {
   const [videoLoaded, setVideoLoaded] = useState(false);
   const videoRef = React.useRef(null);
 
-  // Use video duration if available, otherwise fall back to events duration
-  const duration = videoDuration > 0 
+  // Use video duration if available and valid, otherwise fall back to session duration
+  const duration = (videoDuration > 0 && isFinite(videoDuration))
     ? videoDuration 
-    : (sessionData?.events?.length > 0 
-      ? sessionData.events[sessionData.events.length - 1].timestamp 
-      : 0);
+    : (sessionData?.end_time && sessionData?.start_time
+      ? sessionData.end_time - sessionData.start_time
+      : (sessionData?.events?.length > 0 
+        ? sessionData.events[sessionData.events.length - 1].timestamp 
+        : 0));
 
   useEffect(() => {
     if (videoRef.current) {
@@ -24,13 +26,24 @@ export default function ReviewMode({ sessionData, onClose }) {
     }
   }, [playbackSpeed]);
 
+  // Force video to load metadata on mount
+  useEffect(() => {
+    if (videoRef.current && sessionData?.video_file) {
+      console.log('🎬 Loading video:', sessionData.video_file);
+      videoRef.current.load();
+    }
+  }, [sessionData?.video_file]);
+
   useEffect(() => {
     if (playing && videoRef.current && videoLoaded) {
-      videoRef.current.play().catch(err => {
-        console.error('Error playing video:', err);
-        setPlaying(false);
-      });
-    } else if (videoRef.current) {
+      // Check if video is ready to play (readyState >= 2 means enough data loaded)
+      if (videoRef.current.readyState >= 2) {
+        videoRef.current.play().catch(err => {
+          console.error('Error playing video:', err);
+          setPlaying(false);
+        });
+      }
+    } else if (videoRef.current && !playing) {
       videoRef.current.pause();
     }
   }, [playing, videoLoaded]);
@@ -43,9 +56,26 @@ export default function ReviewMode({ sessionData, onClose }) {
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      setVideoDuration(videoRef.current.duration);
+      const duration = videoRef.current.duration;
+      console.log('📹 Video metadata loaded:', {
+        duration,
+        readyState: videoRef.current.readyState,
+        networkState: videoRef.current.networkState,
+        videoWidth: videoRef.current.videoWidth,
+        videoHeight: videoRef.current.videoHeight
+      });
+      
+      // Always set videoLoaded to true even if duration is invalid
+      // Video can still play, we'll use session duration as fallback
       setVideoLoaded(true);
-      console.log('Video loaded, duration:', videoRef.current.duration);
+      
+      if (duration && !isNaN(duration) && isFinite(duration)) {
+        setVideoDuration(duration);
+        console.log('✅ Video duration set:', duration);
+      } else {
+        console.warn('⚠️ Invalid duration, using session duration fallback');
+        setVideoDuration(0); // Force fallback to session duration
+      }
     }
   };
 
@@ -80,9 +110,11 @@ export default function ReviewMode({ sessionData, onClose }) {
     handleSeekToTime(newTime);
   };
 
-  const eventsAtCurrentTime = sessionData?.events?.filter(
-    e => Math.abs(e.timestamp - currentTime) < 2
-  ) || [];
+  const eventsAtCurrentTime = sessionData?.events?.filter(event => {
+    // Convert absolute timestamp to relative seconds from start_time
+    const eventTime = event.timestamp - (sessionData?.start_time || 0);
+    return Math.abs(eventTime - currentTime) < 2;
+  }) || [];
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-6">
@@ -119,9 +151,10 @@ export default function ReviewMode({ sessionData, onClose }) {
                     onError={handleVideoError}
                     onEnded={() => setPlaying(false)}
                     controls={false}
+                    crossOrigin="anonymous"
+                    preload="metadata"
+                    src={`http://localhost:5000/recordings/${sessionData.video_file}`}
                   >
-                    <source src={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`} type="video/x-msvideo" />
-                    <source src={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`} type="video/mp4" />
                     Your browser does not support video playback.
                   </video>
                   {!videoLoaded && !videoError && (

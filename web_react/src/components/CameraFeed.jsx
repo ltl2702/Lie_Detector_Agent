@@ -11,7 +11,7 @@ const EYE_BLINK_THRESHOLD = 0.15;
 const MAX_FRAMES = 120; // 4 seconds at 30fps
 const HAND_FACE_DISTANCE_THRESHOLD = 0.05;
 
-export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
+export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate, onVideoRecorded, onRecorderReady }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [error, setError] = useState(null);
@@ -23,6 +23,11 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const resultsRef = useRef({ face: null, hands: null });
   const modelsReady = useRef({ faceMesh: false, hands: false });
   const drawingRef = useRef(false); // Prevent concurrent drawing
+  
+  // MediaRecorder for video recording
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const [isRecording, setIsRecording] = useState(false);
   
   // Metrics tracking
   const blinksBuffer = useRef([]);
@@ -143,7 +148,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
             height: { ideal: 720 },
             facingMode: "user"
           }, 
-          audio: false 
+          audio: true // Enable audio for better MediaRecorder compatibility
         });
 
         if (videoRef.current) {
@@ -155,6 +160,50 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           videoRef.current.onloadedmetadata = () => {
             console.log('📹 Video stream ready');
             startMediaPipeProcessing();
+            
+            // Setup MediaRecorder after canvas is ready
+            setTimeout(() => {
+              if (canvasRef.current) {
+                try {
+                  // Capture stream from canvas (with landmarks)
+                  const canvasStream = canvasRef.current.captureStream(30); // 30 fps
+                  
+                  // Add audio from original stream
+                  const audioTracks = stream.getAudioTracks();
+                  if (audioTracks.length > 0) {
+                    canvasStream.addTrack(audioTracks[0]);
+                  }
+                  
+                  const options = { mimeType: 'video/webm;codecs=vp9,opus' };
+                  const mediaRecorder = new MediaRecorder(canvasStream, options);
+                  
+                  mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                      recordedChunksRef.current.push(event.data);
+                    }
+                  };
+                  
+                  mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+                    console.log('📹 Recording stopped, blob size:', blob.size);
+                    if (onVideoRecorded) {
+                      onVideoRecorded(blob);
+                    }
+                    recordedChunksRef.current = [];
+                  };
+                  
+                  mediaRecorderRef.current = mediaRecorder;
+                  console.log('✅ MediaRecorder initialized (from canvas with landmarks)');
+                  
+                  // Notify parent component
+                  if (onRecorderReady) {
+                    onRecorderReady(mediaRecorder);
+                  }
+                } catch (err) {
+                  console.error('MediaRecorder initialization error:', err);
+                }
+              }
+            }, 2000); // Wait 2s for canvas to be ready
           };
         }
       } catch (err) {
@@ -400,12 +449,27 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
 
     return () => {
       console.log('🧹 Cleaning up camera and MediaPipe...');
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
       if (cameraRef.current) {
         cameraRef.current.stop();
       }
+      
+      // Clear canvas
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+      
+      // Clear video source
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      
       // Clean up MediaPipe instances
       if (faceMeshRef.current) {
         faceMeshRef.current.close();
@@ -418,6 +482,20 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       modelsReady.current = { faceMesh: false, hands: false };
     };
   }, []);
+  
+  // Start/stop recording based on calibration status
+  useEffect(() => {
+    if (calibrated && mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+      try {
+        recordedChunksRef.current = [];
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+        console.log('🎥 MediaRecorder started recording');
+      } catch (err) {
+        console.error('Failed to start recording:', err);
+      }
+    }
+  }, [calibrated]);
 
   return (
     <div className="camera-feed-container bg-gray-800 rounded-lg overflow-hidden">

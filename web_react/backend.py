@@ -6,6 +6,7 @@ Connects React frontend with Python deception detection engine
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from werkzeug.utils import secure_filename
 import sys
 import os
 import threading
@@ -245,6 +246,74 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     })
 
+@app.route('/api/upload_video', methods=['POST'])
+def upload_video():
+    """Upload video from frontend and save to recordings folder"""
+    try:
+        if 'video' not in request.files:
+            return jsonify({'status': 'error', 'message': 'No video file provided'}), 400
+        
+        video_file = request.files['video']
+        session_id = request.form.get('session_id', 'unknown')
+        
+        # Generate secure filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = secure_filename(f"session_{session_id}_{timestamp}.webm")
+        
+        # Create recordings directory
+        recordings_dir = Path(__file__).parent.parent / 'recordings'
+        recordings_dir.mkdir(exist_ok=True)
+        
+        # Save video file
+        save_path = recordings_dir / filename
+        video_file.save(str(save_path))
+        
+        print(f"🎥 [UPLOAD] Video saved: {save_path} ({save_path.stat().st_size} bytes)")
+        
+        return jsonify({
+            'status': 'success',
+            'video_file': filename,
+            'size': save_path.stat().st_size
+        }), 200
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/recordings/<path:filename>', methods=['GET'])
+def serve_recording(filename):
+    """Serve recorded video files with proper headers for video streaming"""
+    try:
+        recordings_dir = Path(__file__).parent.parent / 'recordings'
+        file_path = recordings_dir / filename
+        
+        if not file_path.exists():
+            return jsonify({'status': 'error', 'message': 'Video file not found'}), 404
+        
+        # Get file size for Content-Length header
+        file_size = file_path.stat().st_size
+        
+        response = send_file(
+            str(file_path), 
+            mimetype='video/webm',
+            as_attachment=False,
+            conditional=True  # Enable conditional requests (Range support)
+        )
+        
+        # Add CORS headers
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Range'
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Content-Length'] = str(file_size)
+        
+        return response
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/api/session/start', methods=['POST'])
 def start_session():
     """Start a new detection session"""
@@ -274,14 +343,18 @@ def end_session(session_id):
         if session_id in sessions:
             session = sessions[session_id]
             
-            # Store video filename before stopping camera
-            video_filename = str(session.video_filename.name) if session.video_filename else None
-            
             if session.camera_running:
                 session.stop_camera_capture()
             
             # Get session data from request if provided
             request_data = request.get_json() if request.is_json else {}
+            
+            # Prioritize video_file from frontend (uploaded video) over server-side recording
+            video_filename = request_data.get('video_file')
+            if not video_filename and session.video_filename:
+                video_filename = str(session.video_filename.name)
+            
+            print(f"📹 Video file for session {session_id}: {video_filename}")
             
             # Create session review data
             session_data = {
@@ -298,8 +371,10 @@ def end_session(session_id):
                 'events': [
                     {
                         'timestamp': tell.get('timestamp', 0),
-                        'type': tell.get('type', 'detection'),
-                        'message': tell.get('message', '')
+                        'tell_type': tell.get('type', 'detection'),
+                        'tell_text': tell.get('message', ''),
+                        'stress_level': 2 if tell.get('type') in ['lips', 'blink', 'bpm'] else 1,
+                        'confidence': 0.8
                     } for tell in session.tells
                 ] if session.tells else [],
                 'video_file': video_filename
