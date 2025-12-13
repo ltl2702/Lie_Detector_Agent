@@ -64,7 +64,9 @@ export default function LieDetectorApp() {
   const [dominantEmotion, setDominantEmotion] = useState("neutral");
   const [emotionConfidence, setEmotionConfidence] = useState(0);
 
+  // --- BEHAVIOR STATES ---
   const [lipCompression, setLipCompression] = useState(false);
+  const [gazeDetected, setGazeDetected] = useState(false); // <--- MỚI: State cho Gaze
   const [analyzing, setAnalyzing] = useState(false);
 
   // --- STATE PHÂN TÍCH STRESS ---
@@ -136,7 +138,10 @@ export default function LieDetectorApp() {
       count: metrics.handTouchTotal || 0,
       isTouching: metrics.currentHandToFace,
     });
+
+    // Cập nhật các biến hành vi
     setLipCompression(metrics.isLipCompressed || false);
+    setGazeDetected(metrics.gazeShiftIntensity > 0.15); // <--- MỚI: Cập nhật state Gaze
 
     // CHỈ CHẠY PHÂN TÍCH NẾU ĐÃ CALIBRATE
     if (baseline.calibrated) {
@@ -146,10 +151,7 @@ export default function LieDetectorApp() {
 
   // --- 3. LOGIC PHÂN TÍCH NÓI DỐI & TẠO CẢNH BÁO ---
   const analyzeLyingIndicators = (metrics) => {
-    const currentTells = [];
-
     // --- A. BLINK ANALYSIS (Mắt) ---
-    // Rule: Chớp mắt > 35 hoặc gấp 1.5 lần baseline => Lo lắng
     const highBlinkThresh = Math.max(35, baseline.blink_rate * 1.5);
     if (metrics.blinkRate > highBlinkThresh) {
       triggerTell(
@@ -159,7 +161,6 @@ export default function LieDetectorApp() {
       );
     }
 
-    // Rule: Chớp mắt < 5 hoặc < 50% baseline => Nhìn chằm chằm (Cố kiểm soát hoặc tải nhận thức cao)
     const lowBlinkThresh = Math.max(5, baseline.blink_rate * 0.5);
     if (
       metrics.blinkRate < 5 &&
@@ -174,7 +175,6 @@ export default function LieDetectorApp() {
     }
 
     // --- B. EMOTION ANALYSIS (Cảm xúc) ---
-    // Rule: Người nói dối thường lộ vẻ sợ hãi, giận dữ hoặc khinh bỉ
     const negativeEmotions = ["fear", "angry", "disgust", "sad"];
     if (
       negativeEmotions.includes(metrics.dominantEmotion) &&
@@ -188,23 +188,19 @@ export default function LieDetectorApp() {
     }
 
     // --- C. BEHAVIOR (Hành vi) ---
-    // Rule: Chạm tay lên mặt
     if (metrics.currentHandToFace) {
       triggerTell("Hand-to-face contact detected", "hand_face", 7);
     }
 
-    // Rule: Mím môi (Dấu hiệu che giấu)
     if (metrics.isLipCompressed) {
       triggerTell("Lip compression detected (Withholding info)", "lip_comp", 7);
     }
 
-    // Rule: Đảo mắt (Gaze Shift)
     if (metrics.gazeShiftIntensity > 0.15) {
       triggerTell("Gaze shift detected (Avoidance)", "gaze_shift", 5);
     }
 
-    // --- D. HEART RATE (Giả lập logic so sánh BPM) ---
-    // (Trong thực tế cần BPM từ sensor hoặc rPPG chính xác)
+    // --- D. HEART RATE (Giả lập) ---
     const bpmDelta = Math.abs(bpm - baseline.bpm);
     if (bpmDelta > 15) {
       const type = bpm > baseline.bpm ? "increase" : "decrease";
@@ -219,26 +215,24 @@ export default function LieDetectorApp() {
     calculateStressLevel(metrics, bpmDelta);
   };
 
-  // Hàm thêm cảnh báo (chỉ thêm nếu chưa tồn tại loại đó)
+  // Hàm thêm cảnh báo
   const triggerTell = (message, type, ttl) => {
     setTells((prev) => {
-      // Nếu alert loại này đang tồn tại, không spam thêm, chỉ reset TTL nếu cần
       if (prev.some((t) => t.type === type)) return prev;
 
       const newTell = {
         id: Date.now(),
         message,
         type,
-        ttl, // Time to live (seconds)
+        ttl,
       };
 
-      // Update Truth Meter khi có tell mới
       updateTruthMeter(prev.length + 1);
       return [...prev, newTell];
     });
   };
 
-  // --- 4. TÍNH TOÁN MỨC ĐỘ STRESS (WEIGHTED SCORE) ---
+  // --- 4. TÍNH TOÁN MỨC ĐỘ STRESS ---
   const calculateStressLevel = (metrics, bpmDelta) => {
     let score = 0;
 
@@ -248,7 +242,6 @@ export default function LieDetectorApp() {
     else if (metrics.blinkRate < 5) score += 20;
 
     // 2. Emotion Score (Max 30)
-    // Fear/Disgust là dấu hiệu nói dối mạnh
     if (metrics.dominantEmotion === "fear") score += 30;
     else if (
       metrics.dominantEmotion === "disgust" ||
@@ -264,9 +257,9 @@ export default function LieDetectorApp() {
     // 4. Gestures (Max 20)
     if (metrics.currentHandToFace) score += 15;
     if (metrics.isLipCompressed) score += 15;
+    if (metrics.gazeShiftIntensity > 0.15) score += 10; // Thêm điểm cho Gaze
 
     // Tổng hợp
-    // Normalize score max 100
     const finalScore = Math.min(100, score);
     setStressScore(finalScore);
 
@@ -281,26 +274,20 @@ export default function LieDetectorApp() {
       setStressLevel("HIGH STRESS");
       setStressColor("text-red-500");
 
-      // Nếu quá cao, trigger loa cảnh báo
       if (finalScore > 80 && !showAlert) {
         triggerAlert({ message: "CRITICAL STRESS LEVEL DETECTED" });
       }
     }
   };
 
-  // --- 5. USE EFFECT CHO ALERT COUNTDOWN (QUAN TRỌNG) ---
+  // --- 5. USE EFFECT CHO ALERT COUNTDOWN ---
   useEffect(() => {
-    // Chạy mỗi giây để giảm TTL của các cảnh báo
     const timer = setInterval(() => {
       setTells((prevTells) => {
         if (prevTells.length === 0) return [];
-
-        // Giảm ttl đi 1, lọc bỏ những cái <= 0
         const updatedTells = prevTells
           .map((t) => ({ ...t, ttl: t.ttl - 1 }))
           .filter((t) => t.ttl > 0);
-
-        // Update lại Truth Meter dựa trên số lượng tell còn lại
         updateTruthMeter(updatedTells.length);
         return updatedTells;
       });
@@ -309,15 +296,12 @@ export default function LieDetectorApp() {
     return () => clearInterval(timer);
   }, []);
 
-  // --- Helper Functions ---
   const updateTruthMeter = (count) => {
-    // Base 30, mỗi tell + 20, max 100
     const val = Math.min(100, 30 + count * 20);
     setTruthMeterPosition(val);
   };
 
   const triggerAlert = (data) => {
-    // playAlertSound(); // (Giữ nguyên hàm âm thanh cũ của bạn nếu có)
     setShowAlert(true);
     setAlerts((prev) =>
       [
@@ -339,7 +323,6 @@ export default function LieDetectorApp() {
       startTime: Date.now(),
     };
 
-    // Giả lập process
     const interval = setInterval(() => {
       setCalibrationProgress((prev) => {
         if (prev >= 100) {
@@ -347,13 +330,12 @@ export default function LieDetectorApp() {
           completeCalibration();
           return 100;
         }
-        return prev + 2; // Nhanh hơn chút cho demo
+        return prev + 2;
       });
     }, 100);
   };
 
   const completeCalibration = () => {
-    // Tìm cảm xúc chủ đạo trong lúc calibrate
     let maxScore = -1;
     let baseEmo = "neutral";
     Object.entries(calibrationEmotionsAccRef.current).forEach(([k, v]) => {
@@ -365,7 +347,7 @@ export default function LieDetectorApp() {
 
     const measuredBlink = latestMetricsRef.current.blinkRate || 15;
     const finalBaseline = {
-      bpm: 75, // Giả định hoặc lấy từ sensor
+      bpm: 75,
       blink_rate: measuredBlink === 0 ? 15 : measuredBlink,
       emotion: baseEmo,
       hand_baseline_count: 0,
@@ -374,7 +356,7 @@ export default function LieDetectorApp() {
 
     setBaseline(finalBaseline);
     setBpm(finalBaseline.bpm);
-    setBaselineEmotion(emotionData); // Lưu snapshot cảm xúc
+    setBaselineEmotion(emotionData);
     setIsCalibrating(false);
     setAnalyzing(true);
   };
@@ -392,7 +374,6 @@ export default function LieDetectorApp() {
     return colors[emotion] || "#6b7280";
   };
 
-  // Simulation BPM variation for visual effect
   useEffect(() => {
     if (baseline.calibrated) {
       const i = setInterval(() => {
@@ -405,7 +386,6 @@ export default function LieDetectorApp() {
     }
   }, [baseline.calibrated]);
 
-  // --- RENDER ---
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 font-sans">
       <div className="max-w-7xl mx-auto">
@@ -777,6 +757,31 @@ export default function LieDetectorApp() {
                       }`}
                     >
                       {lipCompression ? "DETECTED" : "SAFE"}
+                    </span>
+                  </div>
+
+                  {/* Gaze Shift (MỚI THÊM) */}
+                  <div
+                    className={`flex items-center justify-between p-2 rounded transition-colors ${
+                      gazeDetected
+                        ? "bg-purple-900/30 border border-purple-500/50"
+                        : "bg-gray-700/30"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Eye
+                        className={`w-4 h-4 ${
+                          gazeDetected ? "text-purple-400" : "text-gray-500"
+                        }`}
+                      />
+                      <span className="text-sm text-gray-300">Gaze Shift</span>
+                    </div>
+                    <span
+                      className={`text-xs font-bold ${
+                        gazeDetected ? "text-purple-400" : "text-gray-500"
+                      }`}
+                    >
+                      {gazeDetected ? "DETECTED" : "STABLE"}
                     </span>
                   </div>
                 </div>
