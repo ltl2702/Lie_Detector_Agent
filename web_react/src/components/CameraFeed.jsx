@@ -805,7 +805,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         )}
 
         {modelLoading && (
-          <div className="absolute top-2 right-2 bg-blue-600 text-white text-xs px-2 py-1 rounded z-20 animate-pulse">
+          <div className="absolute top-3 left-3 bg-blue-600 text-white text-xs px-2 py-1 rounded z-20 animate-pulse">
             Loading AI Model...
           </div>
         )}
