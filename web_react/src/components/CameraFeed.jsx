@@ -41,6 +41,22 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   // Ref cho AI Model
   const classifierRef = useRef(null);
   const [modelLoading, setModelLoading] = useState(true);
+
+  // THÊM REF MỚI ĐỂ LƯU KẾT QUẢ EMOTION GẦN NHẤT
+  const latestEmotionRef = useRef({
+    emotionData: {
+      angry: 0,
+      disgust: 0,
+      fear: 0,
+      happy: 0,
+      sad: 0,
+      surprise: 0,
+      neutral: 100,
+    },
+    dominantEmotion: "neutral",
+    emotionConfidence: 0,
+  });
+
   const lastAnalysisTime = useRef(0); // Để throttle (không chạy mỗi frame)
   // THÊM CÁC REF ĐỂ THEO DÕI TRẠNG THÁI CŨ (để phát hiện thay đổi)
   const prevBlinkState = useRef(false);
@@ -616,18 +632,21 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       // Trigger Emotion Analysis mỗi 1 giây (30 frames)
       let aiEmotionResult = null;
       if (frameCountRef.current % 30 === 0 && resultsRef.current.face) {
-        // Mỗi ~1s
         const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
-        // Gọi hàm async nhưng không await để tránh block UI thread quá lâu
+
+        // Gọi AI chạy ngầm (Async)
         analyzeEmotion(videoRef.current, landmarks).then((result) => {
-          if (result && onMetricsUpdate) {
-            // Gửi update riêng cho Emotion để UI mượt hơn
-            onMetricsUpdate({
-              type: "emotion_update", // Đánh dấu loại update
+          if (result) {
+            // CHỈ LƯU VÀO REF, KHÔNG GỌI onMetricsUpdate TẠI ĐÂY NỮA
+            console.log(
+              "🤖 AI Emotion Updated (Internal):",
+              result.dominantEmotion
+            );
+            latestEmotionRef.current = {
               emotionData: result.emotionData,
               dominantEmotion: result.dominantEmotion,
               emotionConfidence: result.confidence,
-            });
+            };
           }
         });
       }
@@ -669,7 +688,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         // const handToFaceFreq = secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
 
         onMetricsUpdate({
-          type: "basic_update",
+          // type: "basic_update",
           blinkRate: slidingWindowRate, // Tốc độ trung bình (lần/phút)
           // blinkCount: totalBlinks.current, // Tổng số lần chớp từ đầu buổi
           blinkCount: currentCycleBlinks.current, // Tổng số lần chớp trong chu kỳ 60s hiện tại
@@ -683,6 +702,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           isLipCompressed: lipCompression, // True/False
           gazeShiftIntensity: gazeShift, // Float (độ lớn của việc đảo mắt)
           frameCount: frameCountRef.current,
+          ...latestEmotionRef.current, // Thêm kết quả cảm xúc mới nhất
         });
       }
     };

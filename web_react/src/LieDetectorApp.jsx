@@ -222,30 +222,23 @@ export default function LieDetectorApp() {
     latestMetricsRef.current = metrics;
 
     // 1. Xử lý update Emotion (Từ AI thật)
-    if (metrics.type === "emotion_update") {
-      console.log(
-        "Emotion Update:",
-        metrics.dominantEmotion,
-        metrics.emotionConfidence
-      );
+    if (metrics.emotionData) {
       setEmotionData(metrics.emotionData);
       setDominantEmotion(metrics.dominantEmotion);
       setEmotionConfidence(metrics.emotionConfidence);
 
-      // Logic tích lũy Emotion khi đang Calibrate
+      // Logic tích lũy Emotion khi Calibrate
       if (isCalibrating) {
         Object.entries(metrics.emotionData).forEach(([key, val]) => {
-          // Cộng dồn % của từng cảm xúc vào Ref
           calibrationEmotionsAccRef.current[key] =
             (calibrationEmotionsAccRef.current[key] || 0) + val;
         });
       }
 
-      // Logic so sánh với Baseline Emotion (Nếu đã calibrate)
+      // Logic check Deviation
       if (baseline.calibrated && baselineEmotion) {
         checkEmotionDeviation(metrics.emotionData);
       }
-      // return;
     }
 
     // 2. Cập nhật UI State
