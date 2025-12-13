@@ -1050,6 +1050,7 @@ export default function LieDetectorApp() {
                     </div>
                   )}
                 </div>
+                {/* Visual Indicator */}
                 <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
                   <div
                     className={`h-full transition-all duration-500 ${
@@ -1066,6 +1067,11 @@ export default function LieDetectorApp() {
                       )}%`,
                     }}
                   ></div>
+                </div>
+                <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                  <span>Stare</span>
+                  <span>Normal</span>
+                  <span>Panic</span>
                 </div>
               </div>
 
