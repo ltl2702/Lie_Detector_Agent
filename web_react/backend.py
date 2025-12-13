@@ -187,6 +187,23 @@ class DetectionSession:
                     cv2.putText(frame_to_save, timestamp_text, (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     
+                    # Add phase indicator (CALIBRATION or ANALYSIS)
+                    phase_text = "CALIBRATION" if not self.calibrated else "ANALYSIS"
+                    phase_color = (0, 165, 255) if not self.calibrated else (0, 255, 0)  # Orange for calibration, green for analysis
+                    text_size = cv2.getTextSize(phase_text, cv2.FONT_HERSHEY_BOLD, 1.2, 3)[0]
+                    text_x = frame_to_save.shape[1] - text_size[0] - 20  # Right side
+                    text_y = 40
+                    
+                    # Draw background rectangle for better readability
+                    cv2.rectangle(frame_to_save, 
+                                (text_x - 10, text_y - text_size[1] - 10),
+                                (text_x + text_size[0] + 10, text_y + 10),
+                                (0, 0, 0), -1)
+                    
+                    # Draw phase text
+                    cv2.putText(frame_to_save, phase_text, (text_x, text_y), 
+                               cv2.FONT_HERSHEY_BOLD, 1.2, phase_color, 3)
+                    
                     # Write frame to video
                     self.video_writer.write(frame_to_save)
                 
@@ -497,14 +514,17 @@ def calibrate_session(session_id):
         session = sessions[session_id]
         session.calibrated = True
         
-        # Start camera capture
+        # Start camera capture with recording when analysis begins
         session.start_camera_capture()
         
-        # Start recording when calibration begins
+        # Start recording after camera initializes
         import time
-        time.sleep(0.5)  # Wait for camera to initialize
+        time.sleep(0.5)
         if session.cap and session.cap.isOpened():
             session.start_recording()
+            print(f"🎥 Recording started for analysis phase")
+        
+        print(f"✅ Session {session_id} marked as calibrated, camera and recording started")
         
         return jsonify({
             'status': 'success',

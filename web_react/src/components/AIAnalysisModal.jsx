@@ -156,12 +156,19 @@ export default function AIAnalysisModal({ analysis, onClose }) {
                 ❓ Câu hỏi đề xuất cho vòng tiếp theo
               </h3>
               <ul className="space-y-2">
-                {analysis.suggested_questions.map((question, idx) => (
-                  <li key={idx} className="flex items-start gap-3 text-purple-100">
-                    <span className="text-yellow-400 text-xl flex-shrink-0">{idx + 1}.</span>
-                    <span className="leading-relaxed">{question}</span>
-                  </li>
-                ))}
+                {analysis.suggested_questions.map((question, idx) => {
+                  // Handle both string and object formats
+                  const questionText = typeof question === 'string' 
+                    ? question 
+                    : (question.question || question.text || JSON.stringify(question));
+                  
+                  return (
+                    <li key={idx} className="flex items-start gap-3 text-purple-100">
+                      <span className="text-yellow-400 text-xl flex-shrink-0">{idx + 1}.</span>
+                      <span className="leading-relaxed">{questionText}</span>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

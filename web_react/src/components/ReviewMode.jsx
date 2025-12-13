@@ -10,6 +10,7 @@ export default function ReviewMode({ sessionData, onClose }) {
   const [videoError, setVideoError] = useState(null);
   const [videoLoaded, setVideoLoaded] = useState(false);
   const videoRef = React.useRef(null);
+  const hasAutoPlayedRef = React.useRef(false);  // Flag to prevent multiple auto-plays
 
   // Convert tells to events format if events array is empty
   const events = useMemo(() => {
@@ -31,14 +32,16 @@ export default function ReviewMode({ sessionData, onClose }) {
     return [];
   }, [sessionData]);
 
-  // Use video duration if available and valid, otherwise fall back to session duration
+  // Calibration typically takes 30 seconds before analysis starts
+  const CALIBRATION_DURATION = 30;
+  
+  // Use video duration only (analysis phase only, not including calibration)
+  // Don't use session duration as it includes calibration time
   const duration = (videoDuration > 0 && isFinite(videoDuration))
     ? videoDuration 
-    : (sessionData?.end_time && sessionData?.start_time
-      ? sessionData.end_time - sessionData.start_time
-      : (events.length > 0 
-        ? events[events.length - 1].timestamp 
-        : 0));
+    : (events.length > 0 
+      ? Math.max(...events.map(e => e.timestamp - (sessionData?.start_time || 0))) - CALIBRATION_DURATION
+      : 22); // Default fallback for webm videos without duration
 
   useEffect(() => {
     if (videoRef.current) {
@@ -160,9 +163,9 @@ export default function ReviewMode({ sessionData, onClose }) {
   };
 
   const eventsAtCurrentTime = events.filter(event => {
-    // Convert absolute timestamp to relative seconds from start_time
-    const eventTime = event.timestamp - (sessionData?.start_time || 0);
-    return Math.abs(eventTime - currentTime) < 2;
+    // Convert absolute timestamp to relative seconds from analysis start (after calibration)
+    const eventTime = event.timestamp - (sessionData?.start_time || 0) - CALIBRATION_DURATION;
+    return eventTime >= 0 && Math.abs(eventTime - currentTime) < 2;
   });
 
   return (
@@ -201,10 +204,10 @@ export default function ReviewMode({ sessionData, onClose }) {
                     onError={handleVideoError}
                     onEnded={() => setPlaying(false)}
                     onCanPlay={() => {
-                      console.log('✅ Video can play - auto-starting playback');
-                      // Auto-play when video is ready
-                      if (videoRef.current && !playing) {
-                        console.log('🎬 Starting auto-play...');
+                      // Auto-play only once when video first becomes ready
+                      if (videoRef.current && !hasAutoPlayedRef.current) {
+                        console.log('✅ Video can play - auto-starting playback (first time)');
+                        hasAutoPlayedRef.current = true;
                         setPlaying(true);
                       }
                     }}
@@ -304,17 +307,23 @@ export default function ReviewMode({ sessionData, onClose }) {
                   onClick={handleSeek}
                 >
                   {/* Event markers */}
-                  {events.map((event, idx) => (
-                    <div
-                      key={idx}
-                      className={`absolute top-0 bottom-0 w-1 ${
-                        event.stress_level >= 3 ? 'bg-red-500' :
-                        event.stress_level >= 2 ? 'bg-yellow-500' :
-                        'bg-blue-500'
-                      } opacity-50`}
-                      style={{ left: `${(event.timestamp / duration) * 100}%` }}
-                    />
-                  ))}
+                  {events.map((event, idx) => {
+                    // Adjust event time to be relative to analysis start
+                    const eventTime = event.timestamp - (sessionData?.start_time || 0) - CALIBRATION_DURATION;
+                    if (eventTime < 0) return null; // Skip events during calibration
+                    
+                    return (
+                      <div
+                        key={idx}
+                        className={`absolute top-0 bottom-0 w-1 ${
+                          event.stress_level >= 3 ? 'bg-red-500' :
+                          event.stress_level >= 2 ? 'bg-yellow-500' :
+                          'bg-blue-500'
+                        } opacity-50`}
+                        style={{ left: `${(eventTime / duration) * 100}%` }}
+                      />
+                    );
+                  })}
 
                   {/* Progress */}
                   <div
@@ -385,12 +394,12 @@ export default function ReviewMode({ sessionData, onClose }) {
                   <span className="text-white font-semibold">{events.length}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-400">Duration:</span>
+                  <span className="text-gray-400">Analysis Duration:</span>
                   <span className="text-white font-semibold">{formatTime(duration)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">FPS:</span>
-                  <span className="text-white font-semibold">{sessionData?.fps || 0}</span>
+                  <span className="text-white font-semibold">{sessionData?.fps || 30}</span>
                 </div>
               </div>
             </div>
