@@ -391,16 +391,16 @@ def end_session(session_id):
             
             print(f"📹 Video file for session {session_id}: {video_filename}")
             
-            # Create session review data
+            # Create session review data - USE session.tells directly (not from request)
             session_data = {
                 'session_id': session_id,
                 'session_name': request_data.get('session_name', f'Session_{datetime.now().strftime("%Y%m%d_%H%M%S")}'),
                 'start_time': session.created_at.timestamp(),
                 'end_time': datetime.now().timestamp(),
                 'calibration_end_time': datetime.now().timestamp(),
-                'baseline': request_data.get('baseline', session.baseline) if session.baseline else {},
-                'tells': request_data.get('tells', session.tells),
-                'metrics': request_data.get('metrics', session.metrics),
+                'baseline': session.baseline if session.baseline else {},
+                'tells': session.tells,  # Use session.tells directly - contains ALL tells collected during session
+                'metrics': session.metrics if session.metrics else {},
                 'frame_count': session.frame_count,
                 'fps': 30,
                 'events': [
@@ -414,6 +414,8 @@ def end_session(session_id):
                 ] if session.tells else [],
                 'video_file': video_filename
             }
+            
+            print(f"📊 Session tells count: {len(session.tells)}")
             
             # Generate AI analysis
             print(f"🤖 Generating AI analysis for session {session_id}...")
@@ -678,6 +680,29 @@ def handle_leave_session(data):
     leave_room(session_id)
     emit('response', {'data': f'Left session {session_id}'})
 
+@socketio.on('frontend_tell')
+def handle_frontend_tell(data):
+    """Receive tells detected from frontend"""
+    session_id = data.get('session_id')
+    tell_type = data.get('type')
+    message = data.get('message')
+    timestamp = data.get('timestamp', time.time())
+    
+    if not session_id or session_id not in sessions:
+        print(f"⚠️  Invalid session_id for frontend tell: {session_id}")
+        return
+    
+    session = sessions[session_id]
+    
+    # Save EVERY tell occurrence - no duplicate filtering
+    session.tells.append({
+        'type': tell_type,
+        'message': message,
+        'timestamp': timestamp,
+        'source': 'frontend'
+    })
+    print(f"📱 Frontend tell received: {tell_type} - {message} (Total: {len(session.tells)})")
+
 # Helper functions
 def get_emotion_data():
     """Get current emotion data from detector"""
@@ -853,30 +878,21 @@ def run_camera_thread(session_id):
                         dd.baseline['calibrated'], 30
                     )
                     
-                    # Save tells to session (only deception tells, not BPM display)
-                    # Track which tells we've already saved this detection cycle
+                    # Save ALL tells to session (count every occurrence, including duplicates)
                     if dd.baseline['calibrated']:
                         for tell_type, tell_data in tells.items():
                             # Skip BPM display tell (avg_bpms is just for display)
                             if tell_type == 'avg_bpms':
                                 continue
                             
-                            # Check if this exact tell was just saved (within last 2 seconds to avoid immediate duplicates)
-                            # deception_detection.py already has throttling (30-90 frames), so we only prevent rapid duplicates
-                            tell_exists = any(
-                                t.get('type') == tell_type and 
-                                t.get('message') == tell_data.get('text', '') and
-                                abs(t.get('timestamp', 0) - time.time()) < 2  # Only last 2 seconds
-                                for t in session.tells
-                            )
-                            
-                            if not tell_exists:
-                                session.tells.append({
-                                    'type': tell_type,
-                                    'message': tell_data.get('text', ''),
-                                    'timestamp': time.time()
-                                })
-                                print(f"🚨 Tell detected: {tell_type} - {tell_data.get('text', '')}")
+                            # Save EVERY tell occurrence - no duplicate filtering
+                            session.tells.append({
+                                'type': tell_type,
+                                'message': tell_data.get('text', ''),
+                                'timestamp': time.time(),
+                                'source': 'backend'
+                            })
+                            print(f"🚨 Tell detected: {tell_type} - {tell_data.get('text', '')} (Total: {len(session.tells)})")
                     
                     # Store current frame for streaming
                     with current_frame_lock:

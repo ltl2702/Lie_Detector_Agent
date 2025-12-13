@@ -517,11 +517,22 @@ export default function LieDetectorApp() {
       ttl: 10 // 10 seconds
     };
     
+    // UI: Keep only latest tell of each type for clean display
     setTells(prev => {
-      // Remove existing tell of same type
       const filtered = prev.filter(t => t.type !== type);
       return [...filtered, newTell];
     });
+    
+    // Backend: Send EVERY tell occurrence (including duplicates) for accurate counting
+    if (wsRef.current && wsRef.current.connected && sessionId) {
+      wsRef.current.emit('frontend_tell', {
+        session_id: sessionId,
+        type: type,
+        message: message,
+        timestamp: newTell.timestamp
+      });
+      console.log('📤 Tell sent to backend:', type, message);
+    }
     
     // Update truth meter based on tells count
     updateTruthMeter(tells.length + 1);
@@ -944,9 +955,9 @@ export default function LieDetectorApp() {
                 </div>
               </div>
               <div className="text-center">
-                <h3 className="text-xl font-bold text-white mb-2">🤖 AI Đang Phân Tích...</h3>
+                <h3 className="text-xl font-bold text-white mb-2">AI Đang Phân Tích...</h3>
                 <p className="text-gray-400 text-sm">Vui lòng đợi trong giây lát</p>
-                <p className="text-purple-400 text-xs mt-2">Gemini AI đang xử lý dữ liệu phiên làm việc</p>
+                <p className="text-purple-400 text-xs mt-2">AI đang xử lý dữ liệu phiên làm việc</p>
               </div>
             </div>
           </div>

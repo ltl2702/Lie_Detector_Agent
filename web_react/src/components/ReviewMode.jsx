@@ -55,16 +55,45 @@ export default function ReviewMode({ sessionData, onClose }) {
   }, [sessionData?.video_file]);
 
   useEffect(() => {
-    if (playing && videoRef.current && videoLoaded) {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (playing && videoLoaded) {
+      console.log('▶️ Attempting to play video', {
+        readyState: video.readyState,
+        paused: video.paused,
+        currentTime: video.currentTime
+      });
+      
       // Check if video is ready to play (readyState >= 2 means enough data loaded)
-      if (videoRef.current.readyState >= 2) {
-        videoRef.current.play().catch(err => {
-          console.error('Error playing video:', err);
-          setPlaying(false);
-        });
+      if (video.readyState >= 2) {
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log('✅ Video playing successfully');
+            })
+            .catch(err => {
+              console.error('❌ Error playing video:', err);
+              setPlaying(false);
+            });
+        }
+      } else {
+        console.warn('⚠️ Video not ready to play yet, readyState:', video.readyState);
+        // Wait for video to be ready
+        const onCanPlay = () => {
+          console.log('✅ Video can now play');
+          video.play().catch(err => {
+            console.error('❌ Error playing video after canplay:', err);
+            setPlaying(false);
+          });
+          video.removeEventListener('canplay', onCanPlay);
+        };
+        video.addEventListener('canplay', onCanPlay);
       }
-    } else if (videoRef.current && !playing) {
-      videoRef.current.pause();
+    } else if (!playing) {
+      console.log('⏸️ Pausing video');
+      video.pause();
     }
   }, [playing, videoLoaded]);
 
@@ -165,20 +194,30 @@ export default function ReviewMode({ sessionData, onClose }) {
                 <>
                   <video
                     ref={videoRef}
-                    className="max-w-full max-h-full"
+                    className="max-w-full max-h-full object-contain"
+                    style={{ display: 'block', width: 'auto', height: 'auto' }}
                     onTimeUpdate={handleTimeUpdate}
                     onLoadedMetadata={handleLoadedMetadata}
                     onError={handleVideoError}
                     onEnded={() => setPlaying(false)}
+                    onCanPlay={() => {
+                      console.log('✅ Video can play - auto-starting playback');
+                      // Auto-play when video is ready
+                      if (videoRef.current && !playing) {
+                        console.log('🎬 Starting auto-play...');
+                        setPlaying(true);
+                      }
+                    }}
                     controls={false}
                     crossOrigin="anonymous"
-                    preload="metadata"
+                    preload="auto"
+                    playsInline
                     src={`http://localhost:5000/recordings/${sessionData.video_file}`}
                   >
                     Your browser does not support video playback.
                   </video>
                   {!videoLoaded && !videoError && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75">
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75 z-10">
                       <div className="text-center">
                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-3"></div>
                         <p className="text-gray-400">Loading video...</p>
@@ -218,7 +257,14 @@ export default function ReviewMode({ sessionData, onClose }) {
                     <SkipBack className="w-5 h-5" />
                   </button>
                   <button
-                    onClick={() => setPlaying(!playing)}
+                    onClick={() => {
+                      console.log('🎮 Play/Pause button clicked', { 
+                        currentPlaying: playing, 
+                        willBe: !playing,
+                        videoLoaded 
+                      });
+                      setPlaying(!playing);
+                    }}
                     className="p-3 bg-blue-600 hover:bg-blue-700 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={!videoLoaded}
                   >
