@@ -11,6 +11,17 @@ import {
   FACEMESH_LIPS,
 } from "@mediapipe/face_mesh";
 import { HAND_CONNECTIONS } from "@mediapipe/hands";
+import { pipeline } from "@xenova/transformers";
+
+const EMOTION_MAP = {
+  joy: "happy",
+  sadness: "sad",
+  anger: "angry",
+  fear: "fear",
+  surprise: "surprise",
+  disgust: "disgust",
+  neutral: "neutral",
+};
 
 // Constants for detection
 const EYE_BLINK_THRESHOLD = 0.42; // Eye Aspect Ratio threshold
@@ -27,6 +38,10 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
   const cameraRef = useRef(null);
   const resultsRef = useRef({ face: null, hands: null });
   const modelsReady = useRef({ faceMesh: false, hands: false });
+  // Ref cho AI Model
+  const classifierRef = useRef(null);
+  const [modelLoading, setModelLoading] = useState(true);
+  const lastAnalysisTime = useRef(0); // Để throttle (không chạy mỗi frame)
   // THÊM CÁC REF ĐỂ THEO DÕI TRẠNG THÁI CŨ (để phát hiện thay đổi)
   const prevBlinkState = useRef(false);
   const prevHandState = useRef(false);
@@ -101,6 +116,119 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     const leftGaze = getDistance(leftIris, leftEyeCenter) / leftEyeWidth;
 
     return (rightGaze + leftGaze) / 2;
+  };
+
+  // --- THÊM: Load Model Hugging Face ---
+  useEffect(() => {
+    const loadModel = async () => {
+      try {
+        console.log("Loading Emotion Model...");
+        // Sử dụng pipeline image-classification
+        // Model gợi ý: 'Xenova/facial_emotions_image_detection' hoặc 'Xenova/emotion-english-distilroberta-base' (cho text),
+        // Cho hình ảnh, ta dùng model FER đã convert sang ONNX.
+        const classifier = await pipeline(
+          "image-classification",
+          "Xenova/facial_emotions_image_detection"
+        );
+        classifierRef.current = classifier;
+        setModelLoading(false);
+        console.log("✅ Emotion Model Loaded!");
+      } catch (err) {
+        console.error("Failed to load emotion model", err);
+      }
+    };
+    loadModel();
+  }, []);
+
+  // --- THÊM: Logic phân tích cảm xúc ---
+  const analyzeEmotion = async (videoElement, faceLandmarks) => {
+    if (!classifierRef.current || !faceLandmarks) return null;
+
+    try {
+      // 1. Cắt khuôn mặt từ video (Bounding Box)
+      // Lấy tọa độ min/max x,y từ landmarks
+      let minX = 1,
+        minY = 1,
+        maxX = 0,
+        maxY = 0;
+      faceLandmarks.forEach((pt) => {
+        if (pt.x < minX) minX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+        if (pt.x > maxX) maxX = pt.x;
+        if (pt.y > maxY) maxY = pt.y;
+      });
+
+      // Thêm padding cho khung hình mặt
+      const padding = 0.1;
+      minX = Math.max(0, minX - padding);
+      minY = Math.max(0, minY - padding);
+      maxX = Math.min(1, maxX + padding);
+      maxY = Math.min(1, maxY + padding);
+
+      // Tạo canvas tạm để crop
+      const tempCanvas = document.createElement("canvas");
+      const tempCtx = tempCanvas.getContext("2d");
+      const videoW = videoElement.videoWidth;
+      const videoH = videoElement.videoHeight;
+
+      const cropX = minX * videoW;
+      const cropY = minY * videoH;
+      const cropW = (maxX - minX) * videoW;
+      const cropH = (maxY - minY) * videoH;
+
+      tempCanvas.width = cropW;
+      tempCanvas.height = cropH;
+
+      // Vẽ phần mặt lên canvas tạm
+      tempCtx.drawImage(
+        videoElement,
+        cropX,
+        cropY,
+        cropW,
+        cropH,
+        0,
+        0,
+        cropW,
+        cropH
+      );
+
+      // Lấy Data URL
+      const imageMap = tempCanvas.toDataURL("image/jpeg", 0.8);
+
+      // 2. Chạy Model Inference
+      const results = await classifierRef.current(imageMap);
+
+      // 3. Chuẩn hóa kết quả trả về format của App
+      // results dạng: [{ label: 'happy', score: 0.9 }, ...]
+      const emotionData = {
+        angry: 0,
+        disgust: 0,
+        fear: 0,
+        happy: 0,
+        sad: 0,
+        surprise: 0,
+        neutral: 0,
+      };
+
+      let dominantEmotion = "neutral";
+      let maxScore = 0;
+
+      results.forEach((res) => {
+        const key = EMOTION_MAP[res.label] || res.label;
+        if (emotionData.hasOwnProperty(key)) {
+          emotionData[key] = res.score * 100; // Đổi sang %
+          if (res.score > maxScore) {
+            maxScore = res.score;
+            dominantEmotion = key;
+          }
+        }
+      });
+
+      return { emotionData, dominantEmotion, confidence: maxScore };
+    } catch (err) {
+      console.error("Emotion analysis error:", err);
+      return null;
+    }
   };
 
   useEffect(() => {
@@ -463,6 +591,25 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       //   handToFaceBuffer.current.shift();
       // }
 
+      // Trigger Emotion Analysis mỗi 1 giây (30 frames)
+      let aiEmotionResult = null;
+      if (frameCountRef.current % 30 === 0 && resultsRef.current.face) {
+        // Mỗi ~1s
+        const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
+        // Gọi hàm async nhưng không await để tránh block UI thread quá lâu
+        analyzeEmotion(videoRef.current, landmarks).then((result) => {
+          if (result && onMetricsUpdate) {
+            // Gửi update riêng cho Emotion để UI mượt hơn
+            onMetricsUpdate({
+              type: "emotion_update", // Đánh dấu loại update
+              emotionData: result.emotionData,
+              dominantEmotion: result.dominantEmotion,
+              emotionConfidence: result.confidence,
+            });
+          }
+        });
+      }
+
       // Calculate and emit metrics every 30 frames (1 second at 30fps)
       if (frameCountRef.current % 30 === 0 && onMetricsUpdate) {
         console.log(
@@ -500,6 +647,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         // const handToFaceFreq = secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
 
         onMetricsUpdate({
+          type: "basic_update",
           blinkRate: slidingWindowRate, // Tốc độ trung bình (lần/phút)
           // blinkCount: totalBlinks.current, // Tổng số lần chớp từ đầu buổi
           blinkCount: currentCycleBlinks.current, // Tổng số lần chớp trong chu kỳ 60s hiện tại
@@ -631,6 +779,12 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         {error && (
           <div className="absolute top-2 left-2 right-2 text-red-400 text-xs bg-red-900/80 p-2 rounded z-10">
             {error}
+          </div>
+        )}
+
+        {modelLoading && (
+          <div className="absolute top-2 right-2 bg-blue-600 text-white text-xs px-2 py-1 rounded z-20 animate-pulse">
+            Loading AI Model...
           </div>
         )}
 

@@ -52,6 +52,9 @@ export default function LieDetectorApp() {
     isTouching: false,
   });
 
+  // Thêm state để lưu trữ baseline emotion distribution
+  const [baselineEmotion, setBaselineEmotion] = useState(null);
+
   const [emotionData, setEmotionData] = useState({
     angry: 0,
     disgust: 0,
@@ -207,6 +210,24 @@ export default function LieDetectorApp() {
     // 1. Cập nhật Refs để dùng cho tính toán Calibration
     latestMetricsRef.current = metrics;
 
+    // 1. Xử lý update Emotion (Từ AI thật)
+    if (metrics.type === "emotion_update") {
+      console.log(
+        "Emotion Update:",
+        metrics.dominantEmotion,
+        metrics.emotionConfidence
+      );
+      setEmotionData(metrics.emotionData);
+      setDominantEmotion(metrics.dominantEmotion);
+      setEmotionConfidence(metrics.emotionConfidence);
+
+      // Logic so sánh với Baseline Emotion (Nếu đã calibrate)
+      if (baseline.calibrated && baselineEmotion) {
+        checkEmotionDeviation(metrics.emotionData);
+      }
+      return;
+    }
+
     // 2. Cập nhật UI State
     setBlinkMetrics({
       rate: metrics.blinkRate,
@@ -260,6 +281,27 @@ export default function LieDetectorApp() {
         addTell("Gaze shift detected", "gaze");
       }
     }
+  };
+
+  // Hàm checkEmotionDeviation
+  const checkEmotionDeviation = (currentEmotions) => {
+    // Ngưỡng cảnh báo: Nếu một cảm xúc tiêu cực tăng đột biến > 20% so với baseline
+    const negativeEmotions = ["fear", "disgust", "angry", "sad"];
+
+    negativeEmotions.forEach((emo) => {
+      const baseVal = baselineEmotion[emo] || 0;
+      const currentVal = currentEmotions[emo] || 0;
+
+      if (currentVal - baseVal > 25) {
+        // Tăng hơn 25%
+        addTell(
+          `Sudden spike in ${emo.toUpperCase()} (+${(
+            currentVal - baseVal
+          ).toFixed(0)}%)`,
+          "emotion_spike"
+        );
+      }
+    });
   };
 
   // Start calibration process
@@ -330,11 +372,17 @@ export default function LieDetectorApp() {
         `Calibration Result -> BlinkRate: ${measuredBlinkRate}, HandTouches: ${measuredHandCount}`
       );
 
+      // Lấy giá trị emotionData hiện tại (được update liên tục từ CameraFeed)
+      const currentEmotionSnapshot = { ...emotionData };
+      setBaselineEmotion(currentEmotionSnapshot);
+      console.log("Captured Baseline Emotion:", currentEmotionSnapshot);
+
       const finalBaseline = {
         bpm: backendBaseline.bpm || 70, // Giữ giả lập hoặc từ backend
         blink_rate: measuredBlinkRate, // Dữ liệu thật
         gaze_stability: backendBaseline.gaze_stability || 0.15,
-        emotion: backendBaseline.emotion || "neutral",
+        // emotion: backendBaseline.emotion || "neutral",
+        emotion: dominantEmotion, // Cảm xúc chủ đạo lúc calibrate
         hand_baseline_count: measuredHandCount, // Dữ liệu thật
         calibrated: true,
       };
@@ -373,41 +421,41 @@ export default function LieDetectorApp() {
         });
 
         // Update emotion data (Simulation)
-        setEmotionData((prev) => {
-          const emotions = [
-            "angry",
-            "disgust",
-            "fear",
-            "happy",
-            "sad",
-            "surprise",
-            "neutral",
-          ];
-          const newData = {};
-          let total = 0;
-          emotions.forEach((emotion) => {
-            const change = (Math.random() - 0.5) * 15;
-            newData[emotion] = Math.max(
-              0,
-              Math.min(100, (prev[emotion] || 0) + change)
-            );
-            total += newData[emotion];
-          });
-          emotions.forEach((emotion) => {
-            newData[emotion] = (newData[emotion] / total) * 100;
-          });
-          let maxEmotion = "neutral";
-          let maxValue = 0;
-          emotions.forEach((emotion) => {
-            if (newData[emotion] > maxValue) {
-              maxValue = newData[emotion];
-              maxEmotion = emotion;
-            }
-          });
-          setDominantEmotion(maxEmotion);
-          setEmotionConfidence(maxValue / 100);
-          return newData;
-        });
+        // setEmotionData((prev) => {
+        //   const emotions = [
+        //     "angry",
+        //     "disgust",
+        //     "fear",
+        //     "happy",
+        //     "sad",
+        //     "surprise",
+        //     "neutral",
+        //   ];
+        //   const newData = {};
+        //   let total = 0;
+        //   emotions.forEach((emotion) => {
+        //     const change = (Math.random() - 0.5) * 15;
+        //     newData[emotion] = Math.max(
+        //       0,
+        //       Math.min(100, (prev[emotion] || 0) + change)
+        //     );
+        //     total += newData[emotion];
+        //   });
+        //   emotions.forEach((emotion) => {
+        //     newData[emotion] = (newData[emotion] / total) * 100;
+        //   });
+        //   let maxEmotion = "neutral";
+        //   let maxValue = 0;
+        //   emotions.forEach((emotion) => {
+        //     if (newData[emotion] > maxValue) {
+        //       maxValue = newData[emotion];
+        //       maxEmotion = emotion;
+        //     }
+        //   });
+        //   setDominantEmotion(maxEmotion);
+        //   setEmotionConfidence(maxValue / 100);
+        //   return newData;
+        // });
 
         // Random lip & gaze simulation (Backup if camera misses)
         if (Math.random() > 0.95) {
@@ -579,7 +627,7 @@ export default function LieDetectorApp() {
           /* LIVE VIEW */
           <div className="grid grid-cols-12 gap-6">
             {/* Left Sidebar - Emotion */}
-            <div className="col-span-3 space-y-4">
+            {/* <div className="col-span-3 space-y-4">
               <div className="bg-gray-800 rounded-lg p-5">
                 <h3 className="text-lg font-bold mb-4 flex items-center justify-between">
                   <span>Emotion (FER)</span>
@@ -610,6 +658,65 @@ export default function LieDetectorApp() {
                           style={{
                             width: `${value}%`,
                             backgroundColor: getEmotionColor(emotion),
+                          }}
+                        ></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div> */}
+            {/* Left Sidebar - Emotion */}
+            <div className="col-span-3 space-y-4">
+              <div className="bg-gray-800 rounded-lg p-5">
+                {/* Header hiển thị Cảm xúc chính và Độ tin cậy tổng thể */}
+                <h3 className="text-lg font-bold mb-4 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span>Emotion (FER)</span>
+                    <span
+                      className="text-sm px-3 py-1.5 rounded font-semibold capitalize"
+                      style={{
+                        backgroundColor: `${getEmotionColor(
+                          dominantEmotion
+                        )}20`,
+                        color: getEmotionColor(dominantEmotion),
+                      }}
+                    >
+                      {dominantEmotion}
+                    </span>
+                  </div>
+
+                  {/* Thanh hiển thị Confidence (Độ tin cậy của AI) */}
+                  <div className="flex items-center justify-between text-xs text-gray-400">
+                    <span>AI Confidence:</span>
+                    <span className="text-white font-mono">
+                      {(emotionConfidence * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                </h3>
+
+                {/* Danh sách các thanh xác suất từng cảm xúc */}
+                <div className="space-y-3">
+                  {Object.entries(emotionData).map(([emotion, value]) => (
+                    <div key={emotion}>
+                      <div className="flex justify-between text-sm mb-1.5">
+                        <span className="capitalize font-medium text-gray-300">
+                          {emotion}
+                        </span>
+                        {/* Hiển thị % chính xác của từng cảm xúc */}
+                        <span className="text-gray-400 font-semibold text-xs">
+                          {value.toFixed(1)}%
+                        </span>
+                      </div>
+
+                      {/* Thanh Progress Bar */}
+                      <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500 ease-out"
+                          style={{
+                            width: `${value}%`, // value trong emotionData đã là thang 100
+                            backgroundColor: getEmotionColor(emotion),
+                            opacity: value > 0 ? 1 : 0.3,
                           }}
                         ></div>
                       </div>
