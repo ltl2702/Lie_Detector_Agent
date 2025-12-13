@@ -196,7 +196,8 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       const imageMap = tempCanvas.toDataURL("image/jpeg", 0.8);
 
       // 2. Chạy Model Inference
-      const results = await classifierRef.current(imageMap);
+      // const results = await classifierRef.current(imageMap);
+      const results = await classifierRef.current(imageMap, { topk: 7 });
 
       // 3. Chuẩn hóa kết quả trả về format của App
       // results dạng: [{ label: 'happy', score: 0.9 }, ...]
@@ -209,22 +210,43 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         surprise: 0,
         neutral: 0,
       };
+      let totalScore = 0;
+      results.forEach((res) => {
+        totalScore += res.score;
+      });
 
+      // Tìm cảm xúc chủ đạo
       let dominantEmotion = "neutral";
-      let maxScore = 0;
+      let maxPercent = 0;
 
       results.forEach((res) => {
+        // Map label từ model sang key của app (nếu cần)
         const key = EMOTION_MAP[res.label] || res.label;
+
         if (emotionData.hasOwnProperty(key)) {
-          emotionData[key] = res.score * 100; // Đổi sang %
-          if (res.score > maxScore) {
-            maxScore = res.score;
+          // Tính phần trăm dựa trên tổng score thực tế để đảm bảo tổng luôn là 100%
+          // Ví dụ: score 0.65 / total 1.0 * 100 = 65.0
+          const percent = (res.score / totalScore) * 100;
+
+          emotionData[key] = parseFloat(percent.toFixed(1)); // Làm tròn 1 số thập phân
+
+          if (percent > maxPercent) {
+            maxPercent = percent;
             dominantEmotion = key;
           }
         }
       });
 
-      return { emotionData, dominantEmotion, confidence: maxScore };
+      // (Log debug để kiểm tra)
+      // console.log("Calculated Emotion:", emotionData);
+
+      return {
+        emotionData,
+        dominantEmotion,
+        confidence: maxPercent / 100, // Trả về dạng 0.0-1.0
+      };
+
+      // return { emotionData, dominantEmotion, confidence: maxScore };
     } catch (err) {
       console.error("Emotion analysis error:", err);
       return null;

@@ -284,24 +284,60 @@ export default function LieDetectorApp() {
   };
 
   // Hàm checkEmotionDeviation
+  // Hàm checkEmotionDeviation: So sánh Emotion hiện tại với Baseline Emotion
   const checkEmotionDeviation = (currentEmotions) => {
-    // Ngưỡng cảnh báo: Nếu một cảm xúc tiêu cực tăng đột biến > 20% so với baseline
-    const negativeEmotions = ["fear", "disgust", "angry", "sad"];
+    // Nếu chưa có baseline emotion thì không check
+    if (!baselineEmotion) return;
 
+    // Danh sách cảm xúc tiêu cực cần theo dõi kỹ
+    // Fear (Sợ), Sad (Buồn/Lo), Disgust (Ghê tởm/Khinh bỉ), Angry (Giận)
+    const negativeEmotions = ["fear", "sad", "disgust", "angry"];
+
+    // Ngưỡng cảnh báo (Threshold)
+    // Nếu cảm xúc tiêu cực tăng > 20% so với lúc bình thường (Baseline) -> Cảnh báo
+    const SPIKE_THRESHOLD = 20;
+
+    // 1. Kiểm tra sự thay đổi của cảm xúc tiêu cực
     negativeEmotions.forEach((emo) => {
       const baseVal = baselineEmotion[emo] || 0;
       const currentVal = currentEmotions[emo] || 0;
+      const deviation = currentVal - baseVal;
 
-      if (currentVal - baseVal > 25) {
-        // Tăng hơn 25%
-        addTell(
-          `Sudden spike in ${emo.toUpperCase()} (+${(
-            currentVal - baseVal
-          ).toFixed(0)}%)`,
-          "emotion_spike"
-        );
+      if (deviation > SPIKE_THRESHOLD) {
+        // Logic ưu tiên: Fear là dấu hiệu nói dối mạnh nhất
+        let severity = "emotion_spike";
+        let alertMsg = `Sudden spike in ${emo.toUpperCase()} (+${deviation.toFixed(
+          0
+        )}%)`;
+
+        if (emo === "fear" && currentVal > 40) {
+          alertMsg = `HIGH FEAR DETECTED (${currentVal.toFixed(0)}%)`;
+          triggerAlert({
+            message: alertMsg,
+            confidence: 0.9,
+            indicators: ["fear"],
+          });
+        }
+
+        addTell(alertMsg, severity);
       }
     });
+
+    // 2. Kiểm tra sự thay đổi của cảm xúc Baseline (Ví dụ: Đang Neutral tụt xuống thấp)
+    // Nếu baseline là 'neutral' hoặc 'happy' mà bị tụt thê thảm -> Có biến
+    if (baseline.emotion === "neutral" || baseline.emotion === "happy") {
+      const baseDominant = baseline.emotion;
+      const currentVal = currentEmotions[baseDominant] || 0;
+      const baseVal = baselineEmotion[baseDominant] || 0;
+
+      // Nếu cảm xúc chủ đạo bình thường giảm quá 40% (VD: từ 80% xuống 30%)
+      if (baseVal - currentVal > 40) {
+        addTell(
+          `Loss of Composure (Baseline ${baseDominant} dropped)`,
+          "composure_loss"
+        );
+      }
+    }
   };
 
   // Start calibration process
@@ -374,15 +410,30 @@ export default function LieDetectorApp() {
 
       // Lấy giá trị emotionData hiện tại (được update liên tục từ CameraFeed)
       const currentEmotionSnapshot = { ...emotionData };
-      setBaselineEmotion(currentEmotionSnapshot);
+      // setBaselineEmotion(currentEmotionSnapshot);
+      // console.log("Captured Baseline Emotion:", currentEmotionSnapshot);
+      // Tìm cảm xúc chủ đạo (Emotion có % cao nhất trong snapshot này)
+      let maxVal = 0;
+      let maxEmo = "neutral";
+      Object.entries(currentEmotionSnapshot).forEach(([key, val]) => {
+        if (val > maxVal) {
+          maxVal = val;
+          maxEmo = key;
+        }
+      });
+
       console.log("Captured Baseline Emotion:", currentEmotionSnapshot);
+      console.log("Baseline Dominant Emotion:", maxEmo);
+
+      setBaselineEmotion(currentEmotionSnapshot); // Lưu phân phối %
 
       const finalBaseline = {
         bpm: backendBaseline.bpm || 70, // Giữ giả lập hoặc từ backend
         blink_rate: measuredBlinkRate, // Dữ liệu thật
         gaze_stability: backendBaseline.gaze_stability || 0.15,
         // emotion: backendBaseline.emotion || "neutral",
-        emotion: dominantEmotion, // Cảm xúc chủ đạo lúc calibrate
+        // emotion: dominantEmotion, // Cảm xúc chủ đạo lúc calibrate
+        emotion: maxEmo, // Ghi nhận Baseline Emotion là cảm xúc cao nhất lúc này
         hand_baseline_count: measuredHandCount, // Dữ liệu thật
         calibrated: true,
       };
@@ -705,7 +756,8 @@ export default function LieDetectorApp() {
                         </span>
                         {/* Hiển thị % chính xác của từng cảm xúc */}
                         <span className="text-gray-400 font-semibold text-xs">
-                          {value.toFixed(1)}%
+                          {typeof value === "number" ? value.toFixed(1) : value}
+                          %
                         </span>
                       </div>
 
