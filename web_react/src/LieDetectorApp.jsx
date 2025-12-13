@@ -762,7 +762,7 @@ export default function LieDetectorApp() {
                 {/* Header hiển thị Cảm xúc chính và Độ tin cậy tổng thể */}
                 <h3 className="text-lg font-bold mb-4 flex flex-col gap-2">
                   <div className="flex items-center justify-between">
-                    <span>Emotion (FER)</span>
+                    <span>Emotion</span>
                     <span
                       className="text-sm px-3 py-1.5 rounded font-semibold capitalize"
                       style={{
@@ -902,9 +902,11 @@ export default function LieDetectorApp() {
               )}
 
               {/* Status & Tells */}
-              {baseline.calibrated && (
+              {cameraActive && baseline.calibrated && (
                 <>
+                  {/* Heart Rate Display with Graph */}
                   <div className="flex gap-4 items-center">
+                    {/* Current BPM */}
                     <div
                       className={`bg-gray-900 bg-opacity-80 rounded-lg p-4 flex items-center gap-3 ${getBpmColor()}`}
                     >
@@ -912,50 +914,88 @@ export default function LieDetectorApp() {
                       <span className="text-3xl font-bold">
                         {bpm.toFixed(1)} BPM
                       </span>
-                      <span className="text-sm font-semibold">
-                        (
-                        {(((bpm - baseline.bpm) / baseline.bpm) * 100).toFixed(
-                          0
-                        )}
-                        %)
-                      </span>
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <div
-                      className={`${
-                        stressColor.includes("green")
-                          ? "bg-green-900 border-green-600"
-                          : "bg-red-900 border-red-600"
-                      } border-2 rounded-lg p-4 flex items-center justify-between`}
-                    >
-                      <span className="text-lg font-bold">
-                        {isCalibrating
-                          ? "Status: Calibrating..."
-                          : `Status: ${stressLevel}`}
-                      </span>
-                      {analyzing && (
-                        <div className="flex gap-1.5">
-                          <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
-                        </div>
+                      {baseline.calibrated && (
+                        <span className="text-sm font-semibold">
+                          (
+                          {(
+                            ((bpm - baseline.bpm) / baseline.bpm) *
+                            100
+                          ).toFixed(0)}
+                          %)
+                        </span>
                       )}
                     </div>
-                    {tells.map((tell) => (
-                      <div
-                        key={tell.id}
-                        className="bg-yellow-900 bg-opacity-50 border-2 border-yellow-600 rounded-lg p-3 flex items-center justify-between animate-pulse"
-                      >
-                        <span className="text-base font-semibold text-yellow-200">
-                          {tell.message}
-                        </span>
-                        <span className="text-sm text-yellow-400 font-bold">
-                          {tell.ttl}s
-                        </span>
-                      </div>
-                    ))}
+
+                    {/* Mini Graph */}
+                    <div className="bg-gray-900 bg-opacity-80 rounded-lg p-3">
+                      <svg width="280" height="70">
+                        <polyline
+                          fill="none"
+                          stroke="#10b981"
+                          strokeWidth="3"
+                          points={Array.from({ length: 50 }, (_, i) => {
+                            const x = i * 5.6;
+                            const y =
+                              35 + Math.sin(i * 0.3 + Date.now() * 0.01) * 20;
+                            return `${x},${y}`;
+                          }).join(" ")}
+                        />
+                      </svg>
+                    </div>
                   </div>
                 </>
               )}
+
+              {/* Status Bar & Detection Tells */}
+              <div className="space-y-3">
+                <div
+                  className={`${
+                    stressColor.includes("green")
+                      ? "bg-green-900 border-green-600"
+                      : stressColor.includes("yellow")
+                      ? "bg-yellow-900 border-yellow-600"
+                      : "bg-red-900 border-red-600"
+                  } border-2 rounded-lg p-4 flex items-center justify-between`}
+                >
+                  <div>
+                    <span className="text-lg font-bold">
+                      {isCalibrating
+                        ? "Status: Calibrating baseline..."
+                        : baseline.calibrated
+                        ? `Status: ${stressLevel}`
+                        : "Status: Ready to calibrate"}
+                    </span>
+                  </div>
+                  {analyzing && (
+                    <div className="flex gap-1.5">
+                      <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                      <div
+                        className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
+                        style={{ animationDelay: "0.2s" }}
+                      ></div>
+                      <div
+                        className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
+                        style={{ animationDelay: "0.4s" }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Detection Tells */}
+                {tells.map((tell) => (
+                  <div
+                    key={tell.id}
+                    className="bg-yellow-900 bg-opacity-50 border-2 border-yellow-600 rounded-lg p-3 flex items-center justify-between animate-pulse"
+                  >
+                    <span className="text-base font-semibold text-yellow-200">
+                      {tell.message}
+                    </span>
+                    <span className="text-sm text-yellow-400 font-bold">
+                      {tell.ttl}s
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Right Sidebar - Blink & Hand */}
