@@ -79,6 +79,7 @@ export default function LieDetectorApp() {
   const [emotionConfidence, setEmotionConfidence] = useState(0.65);
   const [gestureScore, setGestureScore] = useState(85);
   const [lipCompression, setLipCompression] = useState(false);
+  const [gazeDetected, setGazeDetected] = useState(false); // State cho Gaze Shift UI
   const [analyzing, setAnalyzing] = useState(false);
   const [stressLevel, setStressLevel] = useState("LOW STRESS");
   const [stressColor, setStressColor] = useState("text-green-400");
@@ -251,6 +252,9 @@ export default function LieDetectorApp() {
       count: metrics.handTouchTotal || 0, // Đảm bảo lấy đúng tên biến từ CameraFeed
       isTouching: metrics.currentHandToFace,
     });
+
+    setLipCompression(metrics.isLipCompressed || false);
+    setGazeDetected(metrics.gazeShiftIntensity > 0.15); // Cập nhật cho UI
 
     // 3. Logic phát hiện nói dối (Chỉ chạy khi đã Calibrate)
     if (baseline.calibrated && metrics.blinkRate !== undefined) {
@@ -999,148 +1003,163 @@ export default function LieDetectorApp() {
             </div>
 
             {/* Right Sidebar - Blink & Hand */}
+            {/* 3. RIGHT COLUMN: METRICS BREAKDOWN */}
             <div className="col-span-3 space-y-4">
-              {/* Blink Analysis */}
-              <div className="bg-gray-800 rounded-lg p-5">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                  <Eye className="w-5 h-5 text-blue-400" /> Blink Analysis
-                </h3>
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-gray-700/50 rounded p-3 text-center border border-gray-600">
-                      <div className="text-sm text-gray-400 mb-1">Baseline</div>
-                      <div className="text-xl font-bold text-gray-300">
-                        {baseline.calibrated
-                          ? baseline.blink_rate.toFixed(0)
-                          : "--"}
-                      </div>
-                      <div className="text-xs text-gray-500">blinks/min</div>
-                    </div>
-                    <div className="bg-gray-700 rounded p-3 text-center border border-blue-500/30">
-                      <div className="text-sm text-gray-400 mb-1">
-                        Current Rate
-                      </div>
-                      <div
-                        className={`text-2xl font-bold ${
-                          !baseline.calibrated
-                            ? "text-white"
-                            : blinkMetrics.rate > baseline.blink_rate * 1.5
-                            ? "text-red-500"
-                            : "text-green-400"
-                        }`}
-                      >
-                        {blinkMetrics.rate}
-                      </div>
-                      <div className="text-xs text-gray-500">blinks/min</div>
-                    </div>
+              {/* Heart Rate */}
+              <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <h4 className="text-gray-400 text-xs font-bold uppercase mb-2 flex items-center gap-2">
+                  <Heart className="w-4 h-4 text-red-500" /> Heart Rate
+                </h4>
+                <div className="flex items-end justify-between">
+                  <div>
+                    <span className="text-3xl font-bold text-white">
+                      {bpm.toFixed(0)}
+                    </span>
+                    <span className="text-sm text-gray-500 ml-1">BPM</span>
                   </div>
-                  {/* {baseline.calibrated && (
-                    <div className="bg-gray-900/50 rounded-lg p-3">
-                      <div className="flex justify-between items-center text-sm mb-2">
-                        <span className="text-gray-400">Deviation</span>
-                        <span className="font-bold text-green-400">
-                          {(blinkMetrics.rate - baseline.blink_rate).toFixed(0)}
-                        </span>
-                      </div>
-                    </div>
-                  )} */}
-                  {/* Hàng 2: Deviation (Sự thay đổi) */}
                   {baseline.calibrated && (
-                    <div className="bg-gray-900/50 rounded-lg p-3">
-                      <div className="flex justify-between items-center text-sm mb-2">
-                        <span className="text-gray-400">
-                          Deviation vs Baseline
-                        </span>
-                        {(() => {
-                          const diff = blinkMetrics.rate - baseline.blink_rate;
-                          const percent =
-                            baseline.blink_rate > 0
-                              ? (diff / baseline.blink_rate) * 100
-                              : 0;
-                          const isHigh = percent > 50; // Cao hơn 50%
-                          const isLow = percent < -50; // Thấp hơn 50%
-
-                          return (
-                            <span
-                              className={`font-bold ${
-                                isHigh
-                                  ? "text-red-400"
-                                  : isLow
-                                  ? "text-yellow-400"
-                                  : "text-green-400"
-                              }`}
-                            >
-                              {diff > 0 ? "+" : ""}
-                              {percent.toFixed(0)}%
-                            </span>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Progress Bar visualizing deviation */}
-                      <div className="relative h-2 bg-gray-700 rounded-full overflow-hidden">
-                        {/* Center marker */}
-                        <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/30 z-10"></div>
-
-                        {/* Bar */}
-                        {(() => {
-                          const diff = blinkMetrics.rate - baseline.blink_rate;
-                          // Max range visual là +/- 20 nhịp
-                          const clampedDiff = Math.max(-20, Math.min(20, diff));
-                          const widthPercent =
-                            (Math.abs(clampedDiff) / 20) * 50; // 0 -> 50% width
-
-                          return (
-                            <div
-                              className={`absolute top-0 bottom-0 transition-all duration-500 ${
-                                diff > 0
-                                  ? "left-1/2 bg-red-500"
-                                  : "right-1/2 bg-yellow-500"
-                              }`}
-                              style={{ width: `${widthPercent}%` }}
-                            />
-                          );
-                        })()}
-                      </div>
-                      <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-                        <span>Low (Focus/Lying)</span>
-                        <span>High (Stress)</span>
-                      </div>
+                    <div
+                      className={`text-sm font-bold ${
+                        Math.abs(bpm - baseline.bpm) > 10
+                          ? "text-red-400"
+                          : "text-green-400"
+                      }`}
+                    >
+                      {bpm > baseline.bpm ? "+" : ""}
+                      {(bpm - baseline.bpm).toFixed(0)} vs Base
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Hand-to-Face */}
-              <div className="bg-gray-800 rounded-lg p-5">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                  <Hand
-                    className={`w-5 h-5 ${
-                      handMetrics.isTouching
-                        ? "text-red-500 animate-pulse"
-                        : "text-green-400"
+              {/* Blink Analysis */}
+              <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <h4 className="text-gray-400 text-xs font-bold uppercase mb-2 flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-blue-400" /> Blink Rate
+                </h4>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="text-2xl font-bold">
+                    {blinkMetrics.rate}{" "}
+                    <span className="text-sm font-normal text-gray-500">
+                      /min
+                    </span>
+                  </div>
+                  {baseline.calibrated && (
+                    <div className="text-xs px-2 py-1 bg-gray-700 rounded text-gray-300">
+                      Base: {baseline.blink_rate}
+                    </div>
+                  )}
+                </div>
+                <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-500 ${
+                      blinkMetrics.rate > 35
+                        ? "bg-red-500"
+                        : blinkMetrics.rate < 5
+                        ? "bg-yellow-500"
+                        : "bg-green-500"
                     }`}
-                  />{" "}
-                  Hand-to-Face
-                </h3>
-                {handMetrics.isTouching && (
-                  <div className="mb-4 bg-red-900/50 border border-red-500 text-red-200 px-3 py-2 rounded text-center animate-pulse font-bold">
-                    ⚠️ TOUCHING FACE
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        (blinkMetrics.rate / 50) * 100
+                      )}%`,
+                    }}
+                  ></div>
+                </div>
+              </div>
+
+              {/* Behavioral Flags */}
+              <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <h4 className="text-gray-400 text-xs font-bold uppercase mb-3 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-orange-400" /> Behavioral
+                  Flags
+                </h4>
+
+                <div className="space-y-2">
+                  {/* Hand */}
+                  <div
+                    className={`flex items-center justify-between p-2 rounded transition-colors ${
+                      handMetrics.isTouching
+                        ? "bg-red-900/30 border border-red-500/50"
+                        : "bg-gray-700/30"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Hand
+                        className={`w-4 h-4 ${
+                          handMetrics.isTouching
+                            ? "text-red-400"
+                            : "text-gray-500"
+                        }`}
+                      />
+                      <span className="text-sm text-gray-300">
+                        Hand-to-Face
+                      </span>
+                    </div>
+                    <span
+                      className={`text-xs font-bold ${
+                        handMetrics.isTouching
+                          ? "text-red-400 animate-pulse"
+                          : "text-gray-500"
+                      }`}
+                    >
+                      {handMetrics.isTouching ? "DETECTED" : "SAFE"}
+                    </span>
                   </div>
-                )}
-                <div className="bg-gray-700 rounded p-4 text-center">
-                  <div className="text-4xl font-bold text-white">
-                    {handMetrics.count}
+
+                  {/* Lip */}
+                  <div
+                    className={`flex items-center justify-between p-2 rounded transition-colors ${
+                      lipCompression
+                        ? "bg-yellow-900/30 border border-yellow-500/50"
+                        : "bg-gray-700/30"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle
+                        className={`w-4 h-4 ${
+                          lipCompression ? "text-yellow-400" : "text-gray-500"
+                        }`}
+                      />
+                      <span className="text-sm text-gray-300">
+                        Lip Compression
+                      </span>
+                    </div>
+                    <span
+                      className={`text-xs font-bold ${
+                        lipCompression ? "text-yellow-400" : "text-gray-500"
+                      }`}
+                    >
+                      {lipCompression ? "DETECTED" : "SAFE"}
+                    </span>
                   </div>
-                  <div className="text-sm text-gray-400 uppercase tracking-wider mt-1">
-                    Total Contacts
+
+                  {/* Gaze */}
+                  <div
+                    className={`flex items-center justify-between p-2 rounded transition-colors ${
+                      gazeDetected
+                        ? "bg-purple-900/30 border border-purple-500/50"
+                        : "bg-gray-700/30"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Eye
+                        className={`w-4 h-4 ${
+                          gazeDetected ? "text-purple-400" : "text-gray-500"
+                        }`}
+                      />
+                      <span className="text-sm text-gray-300">Gaze Shift</span>
+                    </div>
+                    <span
+                      className={`text-xs font-bold ${
+                        gazeDetected ? "text-purple-400" : "text-gray-500"
+                      }`}
+                    >
+                      {gazeDetected ? "DETECTED" : "STABLE"}
+                    </span>
                   </div>
                 </div>
-                {baseline.calibrated && (
-                  <div className="mt-3 text-xs text-gray-500 text-center">
-                    Baseline: {baseline.hand_baseline_count} touches
-                  </div>
-                )}
               </div>
             </div>
           </div>
