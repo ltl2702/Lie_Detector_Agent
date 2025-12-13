@@ -20,7 +20,7 @@ import ReviewMode from "./components/ReviewMode";
 import SessionHistory from "./components/SessionHistory";
 
 export default function LieDetectorApp() {
-  const [viewMode, setViewMode] = useState("live");
+  const [viewMode, setViewMode] = useState("live"); // 'live', 'history', 'review'
   const [selectedSession, setSelectedSession] = useState(null);
 
   const [cameraActive, setCameraActive] = useState(false);
@@ -28,15 +28,26 @@ export default function LieDetectorApp() {
   const [calibrationProgress, setCalibrationProgress] = useState(0);
   const [sessionId, setSessionId] = useState(null);
 
-  // --- REFS ---
+  // --- REFS CHO CALIBRATION (QUAN TRỌNG) ---
   const latestMetricsRef = useRef({ blinkRate: 0, handTouchTotal: 0 });
   const calibrationStartRef = useRef({ handTouchTotal: 0, startTime: 0 });
-  const calibrationEmotionsAccRef = useRef({});
+
+  // Ref để cộng dồn cảm xúc trong suốt quá trình calibrate
+  const calibrationEmotionsAccRef = useRef({
+    angry: 0,
+    disgust: 0,
+    fear: 0,
+    happy: 0,
+    sad: 0,
+    surprise: 0,
+    neutral: 0,
+  });
+
   const wsRef = useRef(null);
 
   // --- STATE DỮ LIỆU ---
   const [baseline, setBaseline] = useState({
-    bpm: 70,
+    bpm: 70, // Default value để tránh lỗi chia cho 0 khi render
     blink_rate: 15,
     gaze_stability: 0.15,
     emotion: "neutral",
@@ -44,6 +55,7 @@ export default function LieDetectorApp() {
     calibrated: false,
   });
 
+  // Real-time metrics
   const [bpm, setBpm] = useState(0);
   const [blinkMetrics, setBlinkMetrics] = useState({ rate: 0, count: 0 });
   const [handMetrics, setHandMetrics] = useState({
@@ -51,36 +63,39 @@ export default function LieDetectorApp() {
     isTouching: false,
   });
 
+  // Baseline emotion distribution
   const [baselineEmotion, setBaselineEmotion] = useState(null);
+
   const [emotionData, setEmotionData] = useState({
     angry: 0,
     disgust: 0,
-    fear: 0,
-    happy: 0,
-    sad: 0,
-    surprise: 0,
-    neutral: 100,
+    fear: 15,
+    happy: 5,
+    sad: 10,
+    surprise: 5,
+    neutral: 65,
   });
   const [dominantEmotion, setDominantEmotion] = useState("neutral");
-  const [emotionConfidence, setEmotionConfidence] = useState(0);
+  const [emotionConfidence, setEmotionConfidence] = useState(0.65);
 
-  // --- BEHAVIOR STATES ---
+  // Các biến hành vi & Stress
+  const [gestureScore, setGestureScore] = useState(85);
   const [lipCompression, setLipCompression] = useState(false);
-  const [gazeDetected, setGazeDetected] = useState(false); // <--- MỚI: State cho Gaze
+  const [gazeDetected, setGazeDetected] = useState(false); // State cho Gaze Shift UI
   const [analyzing, setAnalyzing] = useState(false);
 
-  // --- STATE PHÂN TÍCH STRESS ---
-  const [stressScore, setStressScore] = useState(0); // 0 - 100
-  const [stressLevel, setStressLevel] = useState("LOW STRESS"); // LOW, MEDIUM, HIGH
+  // Stress Level State (Logic Mới tích hợp)
+  const [stressLevel, setStressLevel] = useState("LOW STRESS");
+  const [stressScore, setStressScore] = useState(0);
   const [stressColor, setStressColor] = useState("text-green-400");
 
-  // --- ALERTS & TELLS ---
-  const [tells, setTells] = useState([]); // { id, message, type, ttl }
+  // Detection tells & Alerts
+  const [tells, setTells] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [showAlert, setShowAlert] = useState(false);
   const [truthMeterPosition, setTruthMeterPosition] = useState(30);
 
-  // --- 1. XỬ LÝ END SESSION ---
+  // --- 1. XỬ LÝ END SESSION (Logic gốc) ---
   const handleEndSession = async () => {
     if (!sessionId) return;
     try {
@@ -88,8 +103,8 @@ export default function LieDetectorApp() {
         session_id: sessionId,
         session_name: `Session_${new Date()
           .toISOString()
-          .slice(0, 19)
-          .replace("T", "_")}`,
+          .replace(/[:.]/g, "-")
+          .slice(0, -5)}`,
         start_time: Date.now() / 1000,
         end_time: Date.now() / 1000,
         baseline: baseline,
@@ -99,15 +114,22 @@ export default function LieDetectorApp() {
 
       await api.endSession(sessionId, sessionData);
 
-      // Reset
+      // Reset state
       setCameraActive(false);
       setSessionId(null);
-      setBaseline((prev) => ({ ...prev, calibrated: false }));
+      setBaseline({
+        bpm: 70,
+        blink_rate: 15,
+        gaze_stability: 0,
+        emotion: "neutral",
+        hand_baseline_count: 0,
+        calibrated: false,
+      });
       setTells([]);
       setStressScore(0);
       setStressLevel("LOW STRESS");
-      if (wsRef.current) wsRef.current.disconnect();
 
+      if (wsRef.current) wsRef.current.disconnect();
       alert("Session ended and saved successfully!");
     } catch (error) {
       console.error("Error ending session:", error);
@@ -115,11 +137,76 @@ export default function LieDetectorApp() {
     }
   };
 
-  // --- 2. XỬ LÝ REAL-TIME METRICS TỪ CAMERA ---
+  // --- 2. SOCKET IO (Logic gốc) ---
+  useEffect(() => {
+    if (cameraActive && baseline.calibrated && sessionId) {
+      console.log("Connecting to Socket.IO server...");
+      const socket = io("http://localhost:5000", {
+        transports: ["websocket", "polling"],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 5,
+      });
+
+      wsRef.current = socket;
+
+      socket.on("connect", () => {
+        console.log("✅ Socket.IO connected:", socket.id);
+        socket.emit("join_session", { session_id: sessionId });
+      });
+
+      socket.on("metrics_update", (data) => updateMetrics(data));
+
+      socket.on("detection_tell", (data) => {
+        if (data.message) addTell(data.message, data.type || "detection", 10);
+      });
+
+      socket.on("high_stress_alert", (data) => triggerAlert(data));
+
+      return () => {
+        if (socket) socket.disconnect();
+      };
+    }
+  }, [cameraActive, baseline.calibrated, sessionId]);
+
+  // --- 3. LOGIC UPDATE METRICS TỪ SOCKET ---
+  const updateMetrics = (data) => {
+    if (data.bpm) setBpm(data.bpm);
+    if (data.emotion_data) setEmotionData(data.emotion_data);
+    if (data.dominant_emotion) setDominantEmotion(data.dominant_emotion);
+    if (data.emotion_confidence) setEmotionConfidence(data.emotion_confidence);
+    if (data.gesture_score) setGestureScore(data.gesture_score);
+
+    // Cập nhật Stress Level từ Backend (nếu có)
+    if (data.stress_level) {
+      setStressLevel(data.stress_level);
+      setStressColor(
+        data.stress_level.includes("HIGH")
+          ? "text-red-400"
+          : data.stress_level.includes("MEDIUM")
+          ? "text-yellow-400"
+          : "text-green-400"
+      );
+    }
+
+    if (data.tells && Array.isArray(data.tells)) {
+      setTells(
+        data.tells.map((t, idx) => ({
+          id: Date.now() + idx,
+          message: t,
+          type: "detection",
+          ttl: 10, // Default TTL cho socket tells
+        }))
+      );
+    }
+  };
+
+  // --- 4. LOGIC XỬ LÝ METRICS TỪ FRONTEND (Logic Gốc Quan Trọng) ---
   const handleFrontendMetrics = (metrics) => {
+    console.log("Frontend metrics:", metrics);
     latestMetricsRef.current = metrics;
 
-    // Cập nhật State cơ bản
+    // 1. Xử lý update Emotion
     if (metrics.emotionData) {
       setEmotionData(metrics.emotionData);
       setDominantEmotion(metrics.dominantEmotion);
@@ -131,140 +218,136 @@ export default function LieDetectorApp() {
             (calibrationEmotionsAccRef.current[key] || 0) + val;
         });
       }
+
+      if (baseline.calibrated && baselineEmotion) {
+        checkEmotionDeviation(metrics.emotionData);
+      }
     }
 
+    // 2. Cập nhật UI State
     setBlinkMetrics({ rate: metrics.blinkRate, count: metrics.blinkCount });
     setHandMetrics({
       count: metrics.handTouchTotal || 0,
       isTouching: metrics.currentHandToFace,
     });
-
-    // Cập nhật các biến hành vi
     setLipCompression(metrics.isLipCompressed || false);
-    setGazeDetected(metrics.gazeShiftIntensity > 0.15); // <--- MỚI: Cập nhật state Gaze
+    setGazeDetected(metrics.gazeShiftIntensity > 0.15); // Cập nhật cho UI
 
-    // CHỈ CHẠY PHÂN TÍCH NẾU ĐÃ CALIBRATE
-    if (baseline.calibrated) {
-      analyzeLyingIndicators(metrics);
+    // 3. Logic phát hiện nói dối (Chỉ chạy khi đã Calibrate)
+    if (baseline.calibrated && metrics.blinkRate !== undefined) {
+      // Logic Blink Rate
+      const highBlinkThreshold = Math.max(35, baseline.blink_rate * 1.5);
+      if (metrics.blinkRate > highBlinkThreshold) {
+        addTell(
+          `Rapid Blinking: ${metrics.blinkRate}/min (Nervousness)`,
+          "blink_high",
+          10
+        );
+      }
+
+      const lowBlinkThreshold = Math.max(5, baseline.blink_rate * 0.5);
+      if (
+        metrics.blinkRate < 8 &&
+        metrics.blinkRate < lowBlinkThreshold &&
+        metrics.frameCount > 450
+      ) {
+        addTell(
+          `Unusual Staring: ${metrics.blinkRate}/min (Cognitive Load)`,
+          "blink_low",
+          10
+        );
+      }
+
+      // Hand-to-face contact
+      if (metrics.currentHandToFace) {
+        addTell("Hand-to-face contact detected", "gesture", 8);
+      }
+
+      // Lip Compression
+      if (metrics.isLipCompressed) {
+        addTell("Lip compression detected", "lips", 9);
+      }
+
+      // Gaze Shift
+      if (metrics.gazeShiftIntensity > 0.15) {
+        addTell("Gaze shift detected", "gaze", 10);
+      }
+
+      // Tính toán Stress Score liên tục
+      calculateStressLevel(metrics, Math.abs(bpm - baseline.bpm));
     }
   };
 
-  // --- 3. LOGIC PHÂN TÍCH NÓI DỐI & TẠO CẢNH BÁO ---
-  const analyzeLyingIndicators = (metrics) => {
-    // --- A. BLINK ANALYSIS (Mắt) ---
-    const highBlinkThresh = Math.max(35, baseline.blink_rate * 1.5);
-    if (metrics.blinkRate > highBlinkThresh) {
-      triggerTell(
-        `Rapid Blinking: ${metrics.blinkRate}/min (Nervousness)`,
-        "blink_high",
-        10
-      );
-    }
+  // --- 5. LOGIC CHECK EMOTION DEVIATION (Logic Gốc) ---
+  const checkEmotionDeviation = (currentEmotions) => {
+    if (!baselineEmotion) return;
+    const negativeEmotions = ["fear", "sad", "disgust", "angry"];
+    const SPIKE_THRESHOLD = 20;
 
-    const lowBlinkThresh = Math.max(5, baseline.blink_rate * 0.5);
-    if (
-      metrics.blinkRate < 5 &&
-      metrics.blinkRate < lowBlinkThresh &&
-      metrics.frameCount > 450
-    ) {
-      triggerTell(
-        `Unusual Staring: ${metrics.blinkRate}/min (Cognitive Load)`,
-        "blink_low",
-        10
-      );
-    }
+    negativeEmotions.forEach((emo) => {
+      const baseVal = baselineEmotion[emo] || 0;
+      const currentVal = currentEmotions[emo] || 0;
+      const deviation = currentVal - baseVal;
 
-    // --- B. EMOTION ANALYSIS (Cảm xúc) ---
-    const negativeEmotions = ["fear", "angry", "disgust", "sad"];
-    if (
-      negativeEmotions.includes(metrics.dominantEmotion) &&
-      metrics.emotionConfidence > 0.6
-    ) {
-      triggerTell(
-        `Negative Emotion: ${metrics.dominantEmotion.toUpperCase()}`,
-        "emotion_neg",
-        8
-      );
-    }
+      if (deviation > SPIKE_THRESHOLD) {
+        let severity = "emotion_spike";
+        let alertMsg = `Sudden spike in ${emo.toUpperCase()} (+${deviation.toFixed(
+          0
+        )}%)`;
 
-    // --- C. BEHAVIOR (Hành vi) ---
-    if (metrics.currentHandToFace) {
-      triggerTell("Hand-to-face contact detected", "hand_face", 7);
-    }
-
-    if (metrics.isLipCompressed) {
-      triggerTell("Lip compression detected (Withholding info)", "lip_comp", 7);
-    }
-
-    if (metrics.gazeShiftIntensity > 0.15) {
-      triggerTell("Gaze shift detected (Avoidance)", "gaze_shift", 5);
-    }
-
-    // --- D. HEART RATE (Giả lập) ---
-    const bpmDelta = Math.abs(bpm - baseline.bpm);
-    if (bpmDelta > 15) {
-      const type = bpm > baseline.bpm ? "increase" : "decrease";
-      triggerTell(
-        `Heart rate ${type} (+${bpmDelta.toFixed(0)} BPM)`,
-        "bpm_alert",
-        10
-      );
-    }
-
-    // --- E. TÍNH TOÁN STRESS LEVEL ---
-    calculateStressLevel(metrics, bpmDelta);
-  };
-
-  // Hàm thêm cảnh báo
-  const triggerTell = (message, type, ttl) => {
-    setTells((prev) => {
-      if (prev.some((t) => t.type === type)) return prev;
-
-      const newTell = {
-        id: Date.now(),
-        message,
-        type,
-        ttl,
-      };
-
-      updateTruthMeter(prev.length + 1);
-      return [...prev, newTell];
+        if (emo === "fear" && currentVal > 40) {
+          alertMsg = `HIGH FEAR DETECTED (${currentVal.toFixed(0)}%)`;
+          triggerAlert({
+            message: alertMsg,
+            confidence: 0.9,
+            indicators: ["fear"],
+          });
+        }
+        addTell(alertMsg, severity, 8);
+      }
     });
+
+    if (baseline.emotion === "neutral" || baseline.emotion === "happy") {
+      const baseDominant = baseline.emotion;
+      const currentVal = currentEmotions[baseDominant] || 0;
+      const baseVal = baselineEmotion[baseDominant] || 0;
+      if (baseVal - currentVal > 40) {
+        addTell(
+          `Loss of Composure (Baseline ${baseDominant} dropped)`,
+          "composure_loss",
+          8
+        );
+      }
+    }
   };
 
-  // --- 4. TÍNH TOÁN MỨC ĐỘ STRESS ---
+  // --- 6. LOGIC TÍNH STRESS LEVEL (Tích hợp thêm để hiển thị Score) ---
   const calculateStressLevel = (metrics, bpmDelta) => {
     let score = 0;
-
-    // 1. Blink Score (Max 30)
+    // Blink Score
     if (metrics.blinkRate > Math.max(35, baseline.blink_rate * 1.5))
       score += 25;
     else if (metrics.blinkRate < 5) score += 20;
 
-    // 2. Emotion Score (Max 30)
+    // Emotion Score
     if (metrics.dominantEmotion === "fear") score += 30;
-    else if (
-      metrics.dominantEmotion === "disgust" ||
-      metrics.dominantEmotion === "angry"
-    )
+    else if (["disgust", "angry"].includes(metrics.dominantEmotion))
       score += 20;
     else if (metrics.dominantEmotion === "sad") score += 10;
 
-    // 3. BPM Score (Max 20)
+    // BPM Score
     if (bpmDelta > 20) score += 20;
     else if (bpmDelta > 10) score += 10;
 
-    // 4. Gestures (Max 20)
+    // Behavior Score
     if (metrics.currentHandToFace) score += 15;
     if (metrics.isLipCompressed) score += 15;
-    if (metrics.gazeShiftIntensity > 0.15) score += 10; // Thêm điểm cho Gaze
+    if (metrics.gazeShiftIntensity > 0.15) score += 10;
 
-    // Tổng hợp
     const finalScore = Math.min(100, score);
     setStressScore(finalScore);
 
-    // Phân loại
-    if (finalScore < 25) {
+    if (finalScore < 30) {
       setStressLevel("LOW STRESS");
       setStressColor("text-green-400");
     } else if (finalScore < 60) {
@@ -273,92 +356,233 @@ export default function LieDetectorApp() {
     } else {
       setStressLevel("HIGH STRESS");
       setStressColor("text-red-500");
-
-      if (finalScore > 80 && !showAlert) {
-        triggerAlert({ message: "CRITICAL STRESS LEVEL DETECTED" });
-      }
     }
   };
 
-  // --- 5. USE EFFECT CHO ALERT COUNTDOWN ---
+  // --- 7. LOGIC ADD TELL + COUNTDOWN (Tích hợp TTL) ---
+  const addTell = (message, type, ttl = 10) => {
+    setTells((prev) => {
+      // Tránh spam cùng loại alert
+      if (prev.some((t) => t.type === type)) return prev;
+
+      const newTell = {
+        id: Date.now() + Math.random(),
+        timestamp: Date.now() / 1000,
+        message,
+        type,
+        ttl: ttl, // Sử dụng TTL truyền vào hoặc mặc định 10s
+      };
+
+      // Cập nhật Truth Meter ngay lập tức
+      updateTruthMeter(prev.length + 1);
+      return [...prev, newTell];
+    });
+  };
+
+  // Effect đếm ngược TTL
   useEffect(() => {
     const timer = setInterval(() => {
       setTells((prevTells) => {
         if (prevTells.length === 0) return [];
-        const updatedTells = prevTells
+        const updated = prevTells
           .map((t) => ({ ...t, ttl: t.ttl - 1 }))
           .filter((t) => t.ttl > 0);
-        updateTruthMeter(updatedTells.length);
-        return updatedTells;
+        updateTruthMeter(updated.length);
+        return updated;
       });
     }, 1000);
-
     return () => clearInterval(timer);
   }, []);
 
-  const updateTruthMeter = (count) => {
-    const val = Math.min(100, 30 + count * 20);
-    setTruthMeterPosition(val);
+  const updateTruthMeter = (tellCount) => {
+    const actualTells = Math.max(0, tellCount); // Đếm chính xác số lỗi đang hiện
+    const baseOffset = 30;
+    const tellMultiplier = 20; // Mỗi lỗi tăng 20%
+    const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
+    setTruthMeterPosition(position);
   };
 
+  // --- 8. LOGIC CALIBRATION (Logic Gốc) ---
+  const startCalibration = async () => {
+    try {
+      setCameraActive(true);
+      setIsCalibrating(true);
+      setCalibrationProgress(0);
+      setTells([]);
+
+      calibrationEmotionsAccRef.current = {
+        angry: 0,
+        disgust: 0,
+        fear: 0,
+        happy: 0,
+        sad: 0,
+        surprise: 0,
+        neutral: 0,
+      };
+      calibrationStartRef.current = {
+        handTouchTotal: latestMetricsRef.current.handTouchTotal || 0,
+        startTime: Date.now(),
+      };
+      console.log(
+        "Calibration Started. Snapshot:",
+        calibrationStartRef.current
+      );
+
+      const response = await api.startSession();
+      setSessionId(response.data.session_id);
+
+      const calibrationInterval = setInterval(() => {
+        setCalibrationProgress((prev) => {
+          if (prev >= 100) {
+            clearInterval(calibrationInterval);
+            completeCalibration();
+            return 100;
+          }
+          return prev + 1; // 30s total
+        });
+      }, 300);
+    } catch (error) {
+      console.error("Error starting calibration:", error);
+      setIsCalibrating(false);
+      setCameraActive(false);
+    }
+  };
+
+  const completeCalibration = async () => {
+    try {
+      let backendBaseline = {};
+      if (sessionId) {
+        await api.calibrateSession(sessionId);
+        try {
+          const response = await api.getBaseline(sessionId);
+          backendBaseline = response.data.baseline || {};
+        } catch (e) {
+          console.warn("Backend baseline fetch failed");
+        }
+      }
+
+      // Tính toán Real Data
+      const measuredBlinkRate = latestMetricsRef.current.blinkRate || 15;
+      const startHand = calibrationStartRef.current.handTouchTotal || 0;
+      const endHand = latestMetricsRef.current.handTouchTotal || 0;
+      const measuredHandCount = Math.max(0, endHand - startHand);
+
+      console.log(
+        `Calibration Result -> BlinkRate: ${measuredBlinkRate}, HandTouches: ${measuredHandCount}`
+      );
+
+      let maxScore = -1;
+      let calculatedBaselineEmotion = "neutral";
+      Object.entries(calibrationEmotionsAccRef.current).forEach(
+        ([key, val]) => {
+          if (val > maxScore) {
+            maxScore = val;
+            calculatedBaselineEmotion = key;
+          }
+        }
+      );
+      if (maxScore === 0) calculatedBaselineEmotion = "neutral";
+
+      console.log(
+        "FINAL BASELINE EMOTION:",
+        calculatedBaselineEmotion.toUpperCase()
+      );
+      setBaselineEmotion({ ...emotionData });
+
+      const finalBaseline = {
+        bpm: backendBaseline.bpm || 75,
+        blink_rate: measuredBlinkRate,
+        gaze_stability: backendBaseline.gaze_stability || 0.15,
+        emotion: calculatedBaselineEmotion,
+        hand_baseline_count: measuredHandCount,
+        calibrated: true,
+      };
+
+      setBaseline(finalBaseline);
+      setBpm(finalBaseline.bpm);
+      setIsCalibrating(false);
+      setAnalyzing(true);
+    } catch (error) {
+      console.error("Error completing calibration:", error);
+      setIsCalibrating(false);
+    }
+  };
+
+  // --- 9. SIMULATION EFFECTS (Logic Gốc + BPM Logic) ---
+  useEffect(() => {
+    if (cameraActive && !isCalibrating && baseline.calibrated) {
+      const interval = setInterval(() => {
+        // Update BPM
+        setBpm((prev) => {
+          const variance = (Math.random() - 0.5) * 8;
+          const newBpm = Math.max(50, Math.min(120, prev + variance));
+          const delta = Math.abs(newBpm - baseline.bpm);
+          if (delta > 10 && Math.random() > 0.7) {
+            const changeType = newBpm > baseline.bpm ? "increase" : "decrease";
+            addTell(
+              `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
+              "bpm",
+              7
+            );
+          }
+          return newBpm;
+        });
+
+        // Backup Simulation for Lip/Gaze if needed (Optional)
+        if (Math.random() > 0.95) {
+          // setLipCompression(true); // Chỉ dùng nếu không có AI detect
+          // setTimeout(() => setLipCompression(false), 2000);
+        }
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [cameraActive, isCalibrating, baseline]);
+
+  // Alert Helpers
   const triggerAlert = (data) => {
+    playAlertSound();
     setShowAlert(true);
     setAlerts((prev) =>
       [
-        { id: Date.now(), message: data.message, timestamp: Date.now() },
+        {
+          id: Date.now(),
+          message: data.message || "HIGH STRESS",
+          timestamp: Date.now(),
+        },
         ...prev,
       ].slice(0, 3)
     );
     setTimeout(() => setShowAlert(false), 3000);
   };
 
-  const startCalibration = async () => {
-    setCameraActive(true);
-    setIsCalibrating(true);
-    setCalibrationProgress(0);
-    setTells([]);
-    calibrationEmotionsAccRef.current = {};
-    calibrationStartRef.current = {
-      handTouchTotal: latestMetricsRef.current.handTouchTotal || 0,
-      startTime: Date.now(),
-    };
-
-    const interval = setInterval(() => {
-      setCalibrationProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          completeCalibration();
-          return 100;
-        }
-        return prev + 2;
-      });
-    }, 100);
+  const playAlertSound = () => {
+    try {
+      const audioContext = new (window.AudioContext ||
+        window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      oscillator.frequency.value = 750;
+      oscillator.type = "sine";
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(
+        0.01,
+        audioContext.currentTime + 0.18
+      );
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.18);
+    } catch (error) {
+      console.error("Audio error", error);
+    }
   };
 
-  const completeCalibration = () => {
-    let maxScore = -1;
-    let baseEmo = "neutral";
-    Object.entries(calibrationEmotionsAccRef.current).forEach(([k, v]) => {
-      if (v > maxScore) {
-        maxScore = v;
-        baseEmo = k;
-      }
-    });
-
-    const measuredBlink = latestMetricsRef.current.blinkRate || 15;
-    const finalBaseline = {
-      bpm: 75,
-      blink_rate: measuredBlink === 0 ? 15 : measuredBlink,
-      emotion: baseEmo,
-      hand_baseline_count: 0,
-      calibrated: true,
-    };
-
-    setBaseline(finalBaseline);
-    setBpm(finalBaseline.bpm);
-    setBaselineEmotion(emotionData);
-    setIsCalibrating(false);
-    setAnalyzing(true);
+  const getBpmColor = () => {
+    if (!baseline.calibrated) return "text-gray-400";
+    const delta = Math.abs(bpm - baseline.bpm);
+    if (delta < 5) return "text-green-400";
+    if (delta < 10) return "text-yellow-400";
+    return "text-red-400";
   };
 
   const getEmotionColor = (emotion) => {
@@ -374,18 +598,7 @@ export default function LieDetectorApp() {
     return colors[emotion] || "#6b7280";
   };
 
-  useEffect(() => {
-    if (baseline.calibrated) {
-      const i = setInterval(() => {
-        setBpm((prev) => {
-          const variance = (Math.random() - 0.5) * 4;
-          return Math.max(50, Math.min(120, prev + variance));
-        });
-      }, 1000);
-      return () => clearInterval(i);
-    }
-  }, [baseline.calibrated]);
-
+  // --- RENDER (Giao diện Mới đã tối ưu) ---
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 font-sans">
       <div className="max-w-7xl mx-auto">
@@ -394,7 +607,6 @@ export default function LieDetectorApp() {
           showAlert={showAlert}
           onDismiss={() => setShowAlert(false)}
         />
-
         {viewMode === "review" && selectedSession && (
           <ReviewMode
             sessionData={selectedSession}
@@ -454,8 +666,6 @@ export default function LieDetectorApp() {
                 <h3 className="text-lg font-bold mb-4 text-gray-200">
                   Real-time Emotion
                 </h3>
-
-                {/* Dominant Emotion Card */}
                 <div className="mb-6 text-center p-4 rounded-lg bg-gray-900 border border-gray-700">
                   <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">
                     Dominant
@@ -469,9 +679,19 @@ export default function LieDetectorApp() {
                   <div className="text-sm text-gray-500 mt-1">
                     Confidence: {(emotionConfidence * 100).toFixed(0)}%
                   </div>
+                  {baseline.calibrated && (
+                    <div className="text-xs text-gray-500 mt-2 border-t border-gray-700 pt-1">
+                      Baseline:{" "}
+                      <span
+                        className="uppercase font-bold"
+                        style={{ color: getEmotionColor(baseline.emotion) }}
+                      >
+                        {baseline.emotion}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {/* List Emotions */}
                 <div className="space-y-3">
                   {Object.entries(emotionData).map(([emotion, value]) => (
                     <div key={emotion}>
@@ -507,7 +727,7 @@ export default function LieDetectorApp() {
 
             {/* 2. CENTER COLUMN: CAMERA & ALERTS */}
             <div className="col-span-6 space-y-4">
-              {/* Top Status Bar */}
+              {/* Stress Bar */}
               {baseline.calibrated && (
                 <div
                   className={`border-2 rounded-lg p-3 flex items-center justify-between shadow-lg transition-colors duration-500 ${
@@ -577,7 +797,7 @@ export default function LieDetectorApp() {
                   <div className="absolute inset-0 bg-black/80 z-20 flex flex-col items-center justify-center">
                     <div className="w-64">
                       <div className="flex justify-between text-blue-400 mb-2 font-bold">
-                        <span>Calibrating Baseline...</span>
+                        <span>Calibrating...</span>
                         <span>{calibrationProgress}%</span>
                       </div>
                       <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
@@ -593,7 +813,7 @@ export default function LieDetectorApp() {
                   </div>
                 )}
 
-                {/* ALERTS OVERLAY (Hiển thị trực tiếp trên video) */}
+                {/* ALERTS OVERLAY (ĐẾM NGƯỢC) */}
                 <div className="absolute bottom-4 left-4 right-4 flex flex-col gap-2 z-10 pointer-events-none">
                   {tells.map((tell) => (
                     <div
@@ -669,7 +889,6 @@ export default function LieDetectorApp() {
                     </div>
                   )}
                 </div>
-                {/* Visual Indicator */}
                 <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
                   <div
                     className={`h-full transition-all duration-500 ${
@@ -687,11 +906,6 @@ export default function LieDetectorApp() {
                     }}
                   ></div>
                 </div>
-                <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-                  <span>Stare</span>
-                  <span>Normal</span>
-                  <span>Panic</span>
-                </div>
               </div>
 
               {/* Behavioral Flags */}
@@ -702,7 +916,7 @@ export default function LieDetectorApp() {
                 </h4>
 
                 <div className="space-y-2">
-                  {/* Hand to Face */}
+                  {/* Hand */}
                   <div
                     className={`flex items-center justify-between p-2 rounded transition-colors ${
                       handMetrics.isTouching
@@ -733,7 +947,7 @@ export default function LieDetectorApp() {
                     </span>
                   </div>
 
-                  {/* Lip Compression */}
+                  {/* Lip */}
                   <div
                     className={`flex items-center justify-between p-2 rounded transition-colors ${
                       lipCompression
@@ -760,7 +974,7 @@ export default function LieDetectorApp() {
                     </span>
                   </div>
 
-                  {/* Gaze Shift (MỚI THÊM) */}
+                  {/* Gaze */}
                   <div
                     className={`flex items-center justify-between p-2 rounded transition-colors ${
                       gazeDetected
