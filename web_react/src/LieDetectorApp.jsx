@@ -33,6 +33,17 @@ export default function LieDetectorApp() {
   // Lưu giá trị tại thời điểm bắt đầu Calibrate để tính Delta
   const calibrationStartRef = useRef({ handTouchTotal: 0, startTime: 0 });
 
+  // Ref để cộng dồn cảm xúc trong suốt quá trình calibrate
+  const calibrationEmotionsAccRef = useRef({
+    angry: 0,
+    disgust: 0,
+    fear: 0,
+    happy: 0,
+    sad: 0,
+    surprise: 0,
+    neutral: 0,
+  });
+
   // Baseline data
   const [baseline, setBaseline] = useState({
     bpm: 0,
@@ -221,11 +232,20 @@ export default function LieDetectorApp() {
       setDominantEmotion(metrics.dominantEmotion);
       setEmotionConfidence(metrics.emotionConfidence);
 
+      // Logic tích lũy Emotion khi đang Calibrate
+      if (isCalibrating) {
+        Object.entries(metrics.emotionData).forEach(([key, val]) => {
+          // Cộng dồn % của từng cảm xúc vào Ref
+          calibrationEmotionsAccRef.current[key] =
+            (calibrationEmotionsAccRef.current[key] || 0) + val;
+        });
+      }
+
       // Logic so sánh với Baseline Emotion (Nếu đã calibrate)
       if (baseline.calibrated && baselineEmotion) {
         checkEmotionDeviation(metrics.emotionData);
       }
-      return;
+      // return;
     }
 
     // 2. Cập nhật UI State
@@ -240,9 +260,9 @@ export default function LieDetectorApp() {
     });
 
     // 3. Logic phát hiện nói dối (Chỉ chạy khi đã Calibrate)
-    if (baseline.calibrated) {
-      const normalRateMin = 10;
-      const normalRateMax = 30;
+    if (baseline.calibrated && metrics.blinkRate !== undefined) {
+      // const normalRateMin = 10;
+      // const normalRateMax = 30;
 
       // Logic Blink Rate
       const highBlinkThreshold = Math.max(35, baseline.blink_rate * 1.5);
@@ -348,6 +368,17 @@ export default function LieDetectorApp() {
       setCalibrationProgress(0);
       setTells([]);
 
+      // Reset accumulator cảm xúc
+      calibrationEmotionsAccRef.current = {
+        angry: 0,
+        disgust: 0,
+        fear: 0,
+        happy: 0,
+        sad: 0,
+        surprise: 0,
+        neutral: 0,
+      };
+
       // --- SNAPSHOT: Lưu trạng thái bắt đầu để tính Delta ---
       calibrationStartRef.current = {
         handTouchTotal: latestMetricsRef.current.handTouchTotal || 0,
@@ -408,24 +439,38 @@ export default function LieDetectorApp() {
         `Calibration Result -> BlinkRate: ${measuredBlinkRate}, HandTouches: ${measuredHandCount}`
       );
 
-      // Lấy giá trị emotionData hiện tại (được update liên tục từ CameraFeed)
-      const currentEmotionSnapshot = { ...emotionData };
-      // setBaselineEmotion(currentEmotionSnapshot);
-      // console.log("Captured Baseline Emotion:", currentEmotionSnapshot);
-      // Tìm cảm xúc chủ đạo (Emotion có % cao nhất trong snapshot này)
-      let maxVal = 0;
-      let maxEmo = "neutral";
-      Object.entries(currentEmotionSnapshot).forEach(([key, val]) => {
-        if (val > maxVal) {
-          maxVal = val;
-          maxEmo = key;
+      let maxScore = -1;
+      let calculatedBaselineEmotion = "neutral";
+
+      // Duyệt qua accumulator để tìm cảm xúc có tổng điểm cao nhất
+      console.log(
+        "📊 Raw Emotion Accumulator:",
+        calibrationEmotionsAccRef.current
+      );
+
+      Object.entries(calibrationEmotionsAccRef.current).forEach(
+        ([key, val]) => {
+          if (val > maxScore) {
+            maxScore = val;
+            calculatedBaselineEmotion = key;
+          }
         }
-      });
+      );
 
-      console.log("Captured Baseline Emotion:", currentEmotionSnapshot);
-      console.log("Baseline Dominant Emotion:", maxEmo);
+      // Nếu không bắt được gì (maxScore = 0) thì fallback về neutral
+      if (maxScore === 0) calculatedBaselineEmotion = "neutral";
 
-      setBaselineEmotion(currentEmotionSnapshot); // Lưu phân phối %
+      // Log kết quả ra console theo yêu cầu
+      console.log("---------------------------------------------");
+      console.log("CALIBRATION COMPLETE");
+      console.log(
+        "FINAL BASELINE EMOTION:",
+        calculatedBaselineEmotion.toUpperCase()
+      );
+      console.log("---------------------------------------------");
+
+      // Lưu snapshot phân phối cảm xúc hiện tại để làm mốc so sánh Deviation
+      setBaselineEmotion({ ...emotionData });
 
       const finalBaseline = {
         bpm: backendBaseline.bpm || 70, // Giữ giả lập hoặc từ backend
@@ -433,7 +478,8 @@ export default function LieDetectorApp() {
         gaze_stability: backendBaseline.gaze_stability || 0.15,
         // emotion: backendBaseline.emotion || "neutral",
         // emotion: dominantEmotion, // Cảm xúc chủ đạo lúc calibrate
-        emotion: maxEmo, // Ghi nhận Baseline Emotion là cảm xúc cao nhất lúc này
+        // emotion: maxEmo, // Ghi nhận Baseline Emotion là cảm xúc cao nhất lúc này
+        emotion: calculatedBaselineEmotion, // Ghi nhận Baseline Emotion là cảm xúc cao nhất lúc này
         hand_baseline_count: measuredHandCount, // Dữ liệu thật
         calibrated: true,
       };
@@ -744,6 +790,17 @@ export default function LieDetectorApp() {
                       {(emotionConfidence * 100).toFixed(1)}%
                     </span>
                   </div>
+                  {baseline.calibrated && (
+                    <div className="flex items-center justify-between text-xs text-gray-400 border-t border-gray-700 pt-2 mt-1">
+                      <span>Baseline Emotion:</span>
+                      <span
+                        className="font-bold uppercase tracking-wider"
+                        style={{ color: getEmotionColor(baseline.emotion) }}
+                      >
+                        {baseline.emotion}
+                      </span>
+                    </div>
+                  )}
                 </h3>
 
                 {/* Danh sách các thanh xác suất từng cảm xúc */}
