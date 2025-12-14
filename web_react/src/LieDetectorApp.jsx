@@ -75,15 +75,15 @@ export default function LieDetectorApp() {
   const [emotionData, setEmotionData] = useState({
     angry: 0,
     disgust: 0,
-    fear: 15,
-    happy: 5,
-    sad: 10,
-    surprise: 5,
-    neutral: 65,
+    fear: 0,
+    happy: 0,
+    sad: 0,
+    surprise: 0,
+    neutral: 0,
   });
   const [dominantEmotion, setDominantEmotion] = useState("neutral");
-  const [emotionConfidence, setEmotionConfidence] = useState(0.65);
-  const [gestureScore, setGestureScore] = useState(85);
+  const [emotionConfidence, setEmotionConfidence] = useState(0);
+  const [gestureScore, setGestureScore] = useState(0);
   const [lipCompression, setLipCompression] = useState(false);
   const [gazeDetected, setGazeDetected] = useState(false); // State cho Gaze Shift UI
   const [analyzing, setAnalyzing] = useState(false);
@@ -100,6 +100,7 @@ export default function LieDetectorApp() {
 
   // Truth meter
   const [truthMeterPosition, setTruthMeterPosition] = useState(30);
+  const [deceptionRisk, setDeceptionRisk] = useState(0);
 
   const wsRef = useRef(null);
   const pollingRef = useRef(null);
@@ -286,28 +287,67 @@ export default function LieDetectorApp() {
         wsRef.current.disconnect();
       }
 
-      // Reset remaining state (sessionId and cameraActive already set at start)
+      // Reset ALL state to initial values
       setIsCalibrating(false);
       setCalibrationProgress(0);
       setAnalyzing(false);
       setLipCompression(false);
+      setGazeDetected(false);
+      
+      // Reset baseline
       setBaseline({
         bpm: 0,
         blink_rate: 0,
         gaze_stability: 0,
         emotion: "neutral",
-        hand_face_frequency: 0,
+        hand_baseline_count: 0,
         calibrated: false,
       });
+      setBaselineEmotion(null);
+      
+      // Reset metrics
+      setBpm(0);
+      setBlinkMetrics({ rate: 0, count: 0 });
+      setHandMetrics({ count: 0, isTouching: false });
+      setEmotionData({
+        angry: 0,
+        disgust: 0,
+        fear: 15,
+        happy: 5,
+        sad: 10,
+        surprise: 5,
+        neutral: 65,
+      });
+      setDominantEmotion("neutral");
+      setEmotionConfidence(0.65);
+      setGestureScore(85);
+      
+      // Reset detection state
       setTells([]);
       setAlerts([]);
       setShowAlert(false);
       setTruthMeterPosition(30);
-      setBpm(0);
+      setDeceptionRisk(0);
       setStressLevel("LOW STRESS");
+      setStressScore(0);
       setStressColor("text-green-400");
+      
+      // Reset refs
       setSessionVideoBlob(null);
       videoBlobRef.current = null;
+      latestMetricsRef.current = { blinkRate: 0, handTouchTotal: 0 };
+      prevMetricsRef.current = null;
+      calibrationStartRef.current = { handTouchTotal: 0, startTime: 0 };
+      stressScoreRef.current = 0;
+      calibrationEmotionsAccRef.current = {
+        angry: 0,
+        disgust: 0,
+        fear: 0,
+        happy: 0,
+        sad: 0,
+        surprise: 0,
+        neutral: 0,
+      };
 
       const videoFile = response.data.video_file || uploadedVideoFile;
       alert(
@@ -1251,7 +1291,7 @@ export default function LieDetectorApp() {
               <div className="space-y-3">
                 <div
                   className={`${
-                    stressColor.includes("green")
+                    isCalibrating || stressColor.includes("green")
                       ? "bg-green-900 border-green-600"
                       : stressColor.includes("yellow")
                       ? "bg-yellow-900 border-yellow-600"

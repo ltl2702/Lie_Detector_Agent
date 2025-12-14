@@ -806,6 +806,8 @@ Trả lời bằng JSON format:
         
         # Parse JSON response
         response_text = response.text.strip()
+        print(f"Gemini raw response: {response_text[:200]}...")
+        
         # Remove markdown code blocks if present
         if response_text.startswith('```json'):
             response_text = response_text[7:]
@@ -815,9 +817,23 @@ Trả lời bằng JSON format:
             response_text = response_text[:-3]
         response_text = response_text.strip()
         
-        analysis = json.loads(response_text)
-        print(f"🤖 AI Analysis completed: {analysis.get('suspicion_level', 'UNKNOWN')}")
-        return analysis
+        # Try to parse JSON
+        try:
+            analysis = json.loads(response_text)
+            print(f"AI Analysis completed: {analysis.get('suspicion_level', 'UNKNOWN')}")
+            return analysis
+        except json.JSONDecodeError as json_err:
+            print(f" Failed to parse Gemini response as JSON: {json_err}")
+            print(f"   Response text: {response_text[:500]}")
+            # Return structured error
+            return {
+                'summary': 'AI response was not in valid JSON format',
+                'recommendation': 'Manual review required',
+                'suspicion_level': 'UNKNOWN',
+                'reasoning': f'Gemini returned non-JSON response. First 200 chars: {response_text[:200]}',
+                'error': str(json_err),
+                'raw_response': response_text[:1000]  # Include part of raw response for debugging
+            }
         
     except Exception as e:
         print(f"❌ Error in AI analysis: {e}")
