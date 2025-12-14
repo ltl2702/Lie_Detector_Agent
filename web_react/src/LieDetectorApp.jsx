@@ -55,7 +55,7 @@ export default function LieDetectorApp() {
     bpm: 0,
     blink_rate: 0,
     gaze_stability: 0,
-    emotion: "neutral",
+    emotion: "unknown",
     hand_baseline_count: 0, // Lưu số lần chạm trong lúc calibrate
     calibrated: false,
   });
@@ -81,7 +81,7 @@ export default function LieDetectorApp() {
     surprise: 0,
     neutral: 0,
   });
-  const [dominantEmotion, setDominantEmotion] = useState("neutral");
+  const [dominantEmotion, setDominantEmotion] = useState("unknown");
   const [emotionConfidence, setEmotionConfidence] = useState(0);
   const [gestureScore, setGestureScore] = useState(0);
   const [lipCompression, setLipCompression] = useState(false);

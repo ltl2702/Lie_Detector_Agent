@@ -19,7 +19,7 @@ except ImportError:
 MAX_FRAMES = 120
 RECENT_FRAMES = int(MAX_FRAMES / 10)
 EYE_BLINK_HEIGHT = .15
-SIGNIFICANT_BPM_CHANGE = 10  # Increased threshold to reduce false positives
+SIGNIFICANT_BPM_CHANGE_PERCENT = 30  # Alert only if BPM changes by 30% or more from baseline
 LIP_COMPRESSION_RATIO = .35
 TEXT_HEIGHT = 30
 FACEMESH_FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10]
@@ -505,17 +505,21 @@ def process_frame(image, face_landmarks, hands_landmarks, calibrated=False, fps=
             baseline_bpm = baseline['bpm']
             bpm_delta = abs(bpm - baseline_bpm)
             
-            # Get adaptive threshold from memory system
-            adaptive_threshold = SIGNIFICANT_BPM_CHANGE
-            if MEMORY_SYSTEM_AVAILABLE:
-                adaptive_threshold_pct = memory_system.get_adaptive_threshold('bpm_change') 
-                adaptive_threshold = baseline_bpm * (adaptive_threshold_pct / 100.0)
+            # Calculate percentage change from baseline
+            bpm_change_percent = (bpm_delta / baseline_bpm) * 100 if baseline_bpm > 0 else 0
             
-            # Use adaptive threshold instead of fixed threshold
-            if bpm_delta > adaptive_threshold:
+            # Get adaptive threshold from memory system (default 20%)
+            threshold_percent = SIGNIFICANT_BPM_CHANGE_PERCENT
+            if MEMORY_SYSTEM_AVAILABLE:
+                threshold_percent = memory_system.get_adaptive_threshold('bpm_change')
+            
+            # Only alert if change is >= threshold percentage
+            if bpm_change_percent >= threshold_percent:
+                # Add debug log for BPM alert
+                print(f"[BPM ALERT] baseline={baseline_bpm:.1f}, bpm={bpm:.1f}, delta={bpm_delta:.1f}, percent={bpm_change_percent:.1f}%, threshold={threshold_percent:.1f}%")
                 # Add cooldown - only report BPM changes every 60 frames (2 seconds)
                 if 'bpm_change' not in tells:  # Only create if no existing BPM change tell
-                    change_desc = f"Heart rate {'increase' if bpm > baseline_bpm else 'decrease'} (+{bpm_delta:.1f} BPM)"
+                    change_desc = f"Heart rate {'increase' if bpm > baseline_bpm else 'decrease'} (+{bpm_delta:.0f} BPM, +{bpm_change_percent:.0f}%)"
                     tells['bpm_change'] = new_tell(change_desc, ttl_for_tells)
         # Always collect blink data
         blinks = blinks[1:] + [is_blinking(face)]
