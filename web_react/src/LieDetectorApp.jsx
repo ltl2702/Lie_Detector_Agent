@@ -32,6 +32,8 @@ export default function LieDetectorApp() {
   // --- REFS CHO CALIBRATION (QUAN TRỌNG) ---
   // Lưu metric mới nhất từ Camera gửi sang
   const latestMetricsRef = useRef({ blinkRate: 0, handTouchTotal: 0 });
+
+  const prevMetricsRef = useRef(null);
   // Lưu giá trị tại thời điểm bắt đầu Calibrate để tính Delta
   const calibrationStartRef = useRef({ handTouchTotal: 0, startTime: 0 });
 
@@ -531,39 +533,110 @@ export default function LieDetectorApp() {
   };
 
   // Real-time monitoring after calibration
+  // useEffect(() => {
+  //   if (cameraActive && !isCalibrating && baseline.calibrated) {
+  //     const interval = setInterval(() => {
+  //       // Update BPM with variation (Simulation)
+  //       setBpm((prev) => {
+  //         const variance = (Math.random() - 0.5) * 8;
+  //         const newBpm = Math.max(50, Math.min(95, prev + variance));
+  //         // Check for significant BPM change
+  //         const delta = Math.abs(newBpm - baseline.bpm);
+  //         if (delta > 10 && Math.random() > 0.7) {
+  //           const changeType = newBpm > baseline.bpm ? "increase" : "decrease";
+  //           addTell(
+  //             `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
+  //             "bpm"
+  //           );
+  //         }
+  //         return newBpm;
+  //       });
+
+  //       // Random lip & gaze simulation (Backup if camera misses)
+  //       if (Math.random() > 0.95) {
+  //         setLipCompression(true);
+  //         addTell("Lip compression detected", "lips");
+  //         setTimeout(() => setLipCompression(false), 2000);
+  //       }
+  //       if (Math.random() > 0.98) {
+  //         addTell("Gaze shift detected", "gaze");
+  //       }
+  //     }, 2000);
+
+  //     return () => clearInterval(interval);
+  //   }
+  // }, [cameraActive, isCalibrating, baseline]);
+
+  // Real-time monitoring after calibration (LOGIC THỰC TẾ)
   useEffect(() => {
+    // Chỉ chạy khi Camera đang bật, không phải lúc đang Calibrate, và đã có Baseline
     if (cameraActive && !isCalibrating && baseline.calibrated) {
       const interval = setInterval(() => {
-        // Update BPM with variation (Simulation)
-        setBpm((prev) => {
-          const variance = (Math.random() - 0.5) * 8;
-          const newBpm = Math.max(50, Math.min(95, prev + variance));
-          // Check for significant BPM change
-          const delta = Math.abs(newBpm - baseline.bpm);
-          if (delta > 10 && Math.random() > 0.7) {
-            const changeType = newBpm > baseline.bpm ? "increase" : "decrease";
+        // 1. LẤY DỮ LIỆU THỰC MỚI NHẤT TỪ REF
+        const currentMetrics = latestMetricsRef.current;
+
+        // Nếu chưa có dữ liệu thì bỏ qua
+        if (!currentMetrics || !currentMetrics.emotionData) return;
+
+        // --- A. KIỂM TRA NHỊP TIM (HEART RATE) ---
+        const currentBpm = currentMetrics.bpm || bpm;
+        const bpmDelta = currentBpm - baseline.bpm;
+
+        if (Math.abs(bpmDelta) > 5) {
+          const type = bpmDelta > 0 ? "increase" : "decrease";
+          const sign = bpmDelta > 0 ? "+" : "";
+          addTell(
+            `Heart rate ${type} (${sign}${bpmDelta.toFixed(1)} BPM)`,
+            "bpm_monitor",
+            3
+          );
+        }
+
+        // --- B. KIỂM TRA CẢM XÚC (EMOTION) ---
+        const currentNegativeScore =
+          (currentMetrics.emotionData.fear || 0) +
+          (currentMetrics.emotionData.angry || 0) +
+          (currentMetrics.emotionData.disgust || 0) +
+          (currentMetrics.emotionData.sad || 0);
+
+        // Logic so sánh xu hướng: Kiểm tra xem prevMetricsRef.current có tồn tại không trước khi dùng
+        if (prevMetricsRef.current && prevMetricsRef.current.emotionData) {
+          const prevNeg =
+            (prevMetricsRef.current.emotionData.fear || 0) +
+            (prevMetricsRef.current.emotionData.angry || 0) +
+            (prevMetricsRef.current.emotionData.disgust || 0) +
+            (prevMetricsRef.current.emotionData.sad || 0);
+
+          const diff = currentNegativeScore - prevNeg;
+          // Nếu tiêu cực tăng > 10% so với 2 giây trước
+          if (diff > 10) {
             addTell(
-              `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
-              "bpm"
+              `Emotion getting worse (+${diff.toFixed(0)}%)`,
+              "emotion_worse"
             );
           }
-          return newBpm;
-        });
+        }
 
-        // Random lip & gaze simulation (Backup if camera misses)
-        if (Math.random() > 0.95) {
-          setLipCompression(true);
-          addTell("Lip compression detected", "lips");
-          setTimeout(() => setLipCompression(false), 2000);
+        // --- C. KIỂM TRA CHỚP MẮT (BLINK RATE) ---
+        const currentBlinkRate = currentMetrics.blinkRate || 0;
+        const blinkDelta = currentBlinkRate - baseline.blink_rate;
+
+        if (Math.abs(blinkDelta) > 8) {
+          const type = blinkDelta > 0 ? "increase" : "decrease";
+          const sign = blinkDelta > 0 ? "+" : "";
+          addTell(
+            `Blink rate ${type} (${sign}${blinkDelta.toFixed(0)}/min)`,
+            "blink_monitor"
+          );
         }
-        if (Math.random() > 0.98) {
-          addTell("Gaze shift detected", "gaze");
-        }
-      }, 2000);
+
+        // --- D. LƯU LẠI METRICS ĐỂ SO SÁNH LẦN SAU ---
+        prevMetricsRef.current = currentMetrics;
+      }, 2000); // Check mỗi 2 giây
 
       return () => clearInterval(interval);
     }
-  }, [cameraActive, isCalibrating, baseline]);
+  }, [cameraActive, isCalibrating, baseline, bpm]);
 
   // --- 7. LOGIC ADD TELL + COUNTDOWN (Tích hợp TTL) ---
   const addTell = (message, type, ttl = 10) => {
