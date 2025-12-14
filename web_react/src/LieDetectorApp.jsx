@@ -5,6 +5,7 @@ import {
   Hand,
   Heart,
   AlertTriangle,
+  TrendingUp,
   Target,
   History,
   Video,
@@ -97,19 +98,154 @@ export default function LieDetectorApp() {
 
   // Truth meter
   const [truthMeterPosition, setTruthMeterPosition] = useState(30);
-  const [deceptionRisk, setDeceptionRisk] = useState(0);
 
-  // Refs for socket
   const wsRef = useRef(null);
+  const pollingRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const videoBlobRef = useRef(null);
+
+  // Video recording
+  const [sessionVideoBlob, setSessionVideoBlob] = useState(null);
+
+  // AI Analysis
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [showAiAnalysis, setShowAiAnalysis] = useState(false);
+  const [isAnalyzingSession, setIsAnalyzingSession] = useState(false);
+
+  // Handle ending session
+  // const handleEndSession = async () => {
+  //   if (!sessionId) return;
+
+  //   try {
+  //     // Save session data
+  //     const sessionData = {
+  //       session_id: sessionId,
+  //       session_name: `Session_${new Date()
+  //         .toISOString()
+  //         .replace(/[:.]/g, "-")
+  //         .slice(0, -5)}`,
+  //       start_time: Date.now() / 1000,
+  //       end_time: Date.now() / 1000,
+  //       baseline: baseline,
+  //       tells: tells.map((t) => ({
+  //         message: t.message,
+  //         type: t.type,
+  //         timestamp: Date.now() / 1000,
+  //       })),
+  //       metrics: {
+  //         bpm: bpm,
+  //         emotion: dominantEmotion,
+  //         stress_level: stressLevel,
+  //       },
+  //     };
+
+  //     // Call backend to end session
+  //     await api.endSession(sessionId, sessionData);
+
+  //     // Reset state
+  //     setCameraActive(false);
+  //     setSessionId(null);
+  //     setBaseline({
+  //       bpm: 0,
+  //       blink_rate: 0,
+  //       gaze_stability: 0,
+  //       emotion: "neutral",
+  //       hand_baseline_count: 0,
+  //       calibrated: false,
+  //     });
+  //     setTells([]);
+
+  //     // Disconnect websocket
+  //     if (wsRef.current) {
+  //       wsRef.current.disconnect();
+  //     }
+
+  //     alert("Session ended and saved successfully!");
+  //   } catch (error) {
+  //     console.error("Error ending session:", error);
+  //     alert("Failed to end session");
+  //   }
+  // };
 
   // Handle ending session
   const handleEndSession = async () => {
     if (!sessionId) return;
 
+    const confirmEnd = window.confirm(
+      "Are you sure you want to end this session? The video will be saved."
+    );
+    if (!confirmEnd) return;
+
+    // Immediately hide all UI components
+    const currentSessionId = sessionId;
+    setSessionId(null);
+    setCameraActive(false);
+
     try {
+      let uploadedVideoFile = null;
+      let videoBlobToUpload = null;
+
+      // Stop MediaRecorder directly and wait for blob
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state === "recording"
+      ) {
+        console.log("⏹️ Stopping MediaRecorder...");
+
+        // Create promise to wait for onstop event
+        const stopPromise = new Promise((resolve) => {
+          const originalOnStop = mediaRecorderRef.current.onstop;
+          mediaRecorderRef.current.onstop = (event) => {
+            if (originalOnStop) originalOnStop(event);
+            // Wait for blob to be saved to ref
+            setTimeout(() => resolve(), 200);
+          };
+        });
+
+        mediaRecorderRef.current.stop();
+        await stopPromise;
+
+        // Get blob from ref
+        videoBlobToUpload = videoBlobRef.current;
+        console.log(
+          "📹 Video blob from ref, size:",
+          videoBlobToUpload?.size || 0
+        );
+      }
+
+      // Stop calibration
+      setBaseline((prev) => ({ ...prev, calibrated: false }));
+
+      // Upload video if available
+      if (videoBlobToUpload && videoBlobToUpload.size > 0) {
+        console.log("📤 Uploading video, size:", videoBlobToUpload.size);
+        const formData = new FormData();
+        formData.append("video", videoBlobToUpload, "session_video.webm");
+        formData.append("session_id", currentSessionId);
+
+        try {
+          const uploadRes = await axios.post(
+            "http://localhost:5000/api/upload_video",
+            formData,
+            {
+              headers: { "Content-Type": "multipart/form-data" },
+            }
+          );
+
+          if (uploadRes.data && uploadRes.data.video_file) {
+            uploadedVideoFile = uploadRes.data.video_file;
+            console.log("✅ Video uploaded:", uploadedVideoFile);
+          }
+        } catch (uploadErr) {
+          console.error("Failed to upload video:", uploadErr);
+        }
+      } else {
+        console.warn("⚠️ No video blob available to upload");
+      }
+
       // Save session data
       const sessionData = {
-        session_id: sessionId,
+        session_id: currentSessionId,
         session_name: `Session_${new Date()
           .toISOString()
           .replace(/[:.]/g, "-")
@@ -117,39 +253,66 @@ export default function LieDetectorApp() {
         start_time: Date.now() / 1000,
         end_time: Date.now() / 1000,
         baseline: baseline,
-        tells: tells,
+        tells: tells.map((t) => ({
+          message: t.message,
+          type: t.type,
+          timestamp: Date.now() / 1000,
+        })),
         metrics: {
           bpm: bpm,
           emotion: dominantEmotion,
           stress_level: stressLevel,
+          gesture_score: gestureScore,
         },
+        video_file: uploadedVideoFile,
       };
 
-      // Call backend to end session
-      await api.endSession(sessionId, sessionData);
+      // Call backend to end session and save video
+      setIsAnalyzingSession(true);
+      const response = await api.endSession(currentSessionId, sessionData);
+      setIsAnalyzingSession(false);
 
-      // Reset state
-      setCameraActive(false);
-      setSessionId(null);
-      setBaseline({
-        bpm: 0,
-        blink_rate: 0,
-        gaze_stability: 0,
-        emotion: "neutral",
-        hand_baseline_count: 0,
-        calibrated: false,
-      });
-      setTells([]);
-      setDeceptionRisk(0);
-      setStressScore(0);
-      setStressLevel("LOW STRESS");
+      // Show AI analysis if available
+      if (response.data?.ai_analysis) {
+        console.log("🤖 Received AI analysis:", response.data.ai_analysis);
+        setAiAnalysis(response.data.ai_analysis);
+        setShowAiAnalysis(true);
+      }
 
       // Disconnect websocket
       if (wsRef.current) {
         wsRef.current.disconnect();
       }
 
-      alert("Session ended and saved successfully!");
+      // Reset remaining state (sessionId and cameraActive already set at start)
+      setIsCalibrating(false);
+      setCalibrationProgress(0);
+      setAnalyzing(false);
+      setLipCompression(false);
+      setBaseline({
+        bpm: 0,
+        blink_rate: 0,
+        gaze_stability: 0,
+        emotion: "neutral",
+        hand_face_frequency: 0,
+        calibrated: false,
+      });
+      setTells([]);
+      setAlerts([]);
+      setShowAlert(false);
+      setTruthMeterPosition(30);
+      setBpm(0);
+      setStressLevel("LOW STRESS");
+      setStressColor("text-green-400");
+      setSessionVideoBlob(null);
+      videoBlobRef.current = null;
+
+      const videoFile = response.data.video_file || uploadedVideoFile;
+      alert(
+        `Session ended successfully!\n${
+          videoFile ? `Video saved: ${videoFile}` : "Session saved."
+        }`
+      );
     } catch (error) {
       console.error("Error ending session:", error);
       alert("Failed to end session");
@@ -175,17 +338,33 @@ export default function LieDetectorApp() {
         socket.emit("join_session", { session_id: sessionId });
       });
 
+      socket.on("disconnect", () => {
+        console.log("Socket.IO disconnected");
+      });
+
+      socket.on("connect_error", (error) => {
+        console.log("Socket.IO connection error, switching to polling");
+        // Fallback to polling
+        startPolling();
+      });
+
+      // Listen for metrics updates
       socket.on("metrics_update", (data) => {
+        console.log("Received metrics update:", data);
         updateMetrics(data);
       });
 
+      // Listen for detection tells
       socket.on("detection_tell", (data) => {
+        console.log("Received detection tell:", data);
         if (data.message) {
           addTell(data.message, data.type || "detection");
         }
       });
 
+      // Listen for alerts
       socket.on("high_stress_alert", (data) => {
+        console.log("HIGH STRESS ALERT:", data);
         triggerAlert(data);
       });
 
@@ -687,105 +866,65 @@ export default function LieDetectorApp() {
     }
   }, [cameraActive, isCalibrating, baseline]);
 
-  // LOGIC ADD TELL + COUNTDOWN (Tích hợp TTL)
-  const addTell = (message, type, ttl = 10) => {
-    setTells((prev) => {
-      // Chặn spam: Nếu đã có lỗi cùng loại trong list thì reset TTL của lỗi đó thay vì thêm mới
-      const exists = prev.find((t) => t.type === type);
-      if (exists) {
-        return prev.map((t) =>
-          t.type === type ? { ...t, ttl: ttl, message: message } : t
-        );
-      }
-
-      const newTell = {
-        id: Date.now() + Math.random(),
-        message,
-        type,
-        ttl,
-      };
-
-      // Nếu lỗi nghiêm trọng -> Alert ngay
-      if (["fear", "bpm_spike"].includes(type)) {
-        triggerAlert({ message: message, type: "critical" });
-      }
-
-      return [...prev, newTell];
-    });
-  };
-
-  // Effect đếm ngược TTL
+  // TTL countdown for tells - auto-remove when expired
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTells((prevTells) => {
-        if (prevTells.length === 0) return [];
-        const updated = prevTells
-          .map((t) => ({ ...t, ttl: t.ttl - 1 }))
-          .filter((t) => t.ttl > 0);
+    if (tells.length === 0 || !cameraActive) return;
+
+    const interval = setInterval(() => {
+      setTells((prev) => {
+        const updated = prev
+          .map((tell) => ({
+            ...tell,
+            ttl: tell.ttl - 1,
+          }))
+          .filter((tell) => tell.ttl > 0);
+
         return updated;
       });
     }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
-  // Bước 1: Tính Deception Risk dựa trên mức độ nghiêm trọng của các Tells
-  useEffect(() => {
-    // Mỗi loại Tell có trọng số rủi ro khác nhau
-    const risk = tells.reduce((acc, tell) => {
-      let weight = 0;
+    return () => clearInterval(interval);
+  }, [tells.length, cameraActive]);
 
-      switch (tell.type) {
-        case "emotion_worse": // Cảm xúc tệ đi đột ngột
-        case "fear": // Sợ hãi
-          weight = 25;
-          break;
-        case "bpm_monitor": // Tim tăng/giảm đột ngột
-          weight = 20;
-          break;
-        case "blink_high": // Chớp mắt loạn xạ
-        case "blink_low": // Nhìn chằm chằm
-          weight = 15;
-          break;
-        case "lips": // Mím môi
-        case "gesture": // Sờ tay lên mặt
-        case "gaze": // Mắt đảo liên tục
-          weight = 10;
-          break;
-        default:
-          weight = 5;
-      }
-      return acc + weight;
-    }, 0);
+  const addTell = (message, type) => {
+    const newTell = {
+      id: Date.now() + Math.random(),
+      timestamp: Date.now() / 1000,
+      message,
+      type,
+      ttl: 10, // 10 seconds
+    };
 
-    // Kẹp giá trị 0-100
-    setDeceptionRisk(Math.min(100, risk));
-  }, [tells]);
+    setTells((prev) => {
+      // Remove existing tell of same type
+      const filtered = prev.filter((t) => t.type !== type);
+      return [...filtered, newTell];
+    });
 
-  // Bước 2: Tính vị trí Kim (Truth Meter) dựa trên Risk + Stress
-  useEffect(() => {
-    // Nếu chưa calibrate xong thì kim để mặc định ở mức an toàn
-    if (!baseline.calibrated) {
-      setTruthMeterPosition(20);
-      return;
+    // Backend: Send EVERY tell occurrence (including duplicates) for accurate counting
+    if (wsRef.current && wsRef.current.connected && sessionId) {
+      wsRef.current.emit("frontend_tell", {
+        session_id: sessionId,
+        type: type,
+        message: message,
+        timestamp: newTell.timestamp,
+      });
+      console.log("📤 Tell sent to backend:", type, message);
     }
-    // Công thức:
-    // - Base: 10 (Mặc định)
-    // - Stress Impact: 30% (Căng thẳng đóng góp 30% vào khả năng nói dối)
-    // - Risk Impact: 70% (Các dấu hiệu cụ thể đóng góp 70%)
 
-    // Ví dụ:
-    // - Người nói thật nhưng hồi hộp: Stress 80, Risk 10 -> Meter = 10 + 24 + 7 = 41 (Vùng Vàng/Xanh - Chưa kết luận nói dối)
-    // - Người nói dối bình tĩnh: Stress 30, Risk 80 -> Meter = 10 + 9 + 56 = 75 (Vùng Đỏ - Nói dối)
+    // Update truth meter based on tells count
+    updateTruthMeter(tells.length + 1);
+  };
 
-    const stressContribution = stressScore * 0.3;
-    const riskContribution = deceptionRisk * 0.7;
-    const baseOffset = 10;
-
-    const rawPosition = baseOffset + stressContribution + riskContribution;
-
-    // Hiệu ứng "Trễ" (Smoothing) để kim không giật cục. Tuy nhiên trong React state đơn giản ta set trực tiếp, CSS transition ở component TruthMeter sẽ lo phần mượt mà.
-    setTruthMeterPosition(Math.min(100, Math.max(0, rawPosition)));
-  }, [stressScore, deceptionRisk]);
+  const updateTruthMeter = (tellCount) => {
+    // Exclude BPM from tell count (if BPM is always shown)
+    const actualTells = Math.max(0, tellCount - 1);
+    // Base offset 30% + faster movement (70% / 3 tells max)
+    const baseOffset = 30;
+    const tellMultiplier = 70 / 3;
+    const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
+    setTruthMeterPosition(position);
+  };
 
   const triggerAlert = (data) => {
     playAlertSound();
@@ -863,11 +1002,14 @@ export default function LieDetectorApp() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
       <div className="max-w-7xl mx-auto">
+        {/* Alert System */}
         <AlertSystem
           alerts={alerts}
           showAlert={showAlert}
           onDismiss={() => setShowAlert(false)}
         />
+
+        {/* Review Mode Modal */}
         {viewMode === "review" && selectedSession && (
           <ReviewMode
             sessionData={selectedSession}
@@ -878,8 +1020,9 @@ export default function LieDetectorApp() {
           />
         )}
 
-        {/* Header */}
+        {/* Header with View Switcher */}
         <div className="mb-6 flex items-center justify-between gap-4">
+          {/* View Mode Buttons */}
           <div className="flex gap-2">
             <button
               onClick={() => setViewMode("live")}
@@ -1004,20 +1147,40 @@ export default function LieDetectorApp() {
               </div>
             </div>
 
-            {/* Main Video */}
+            {/* Main Content */}
             <div className="col-span-6 space-y-4">
+              {/* Truth Meter - Above Video */}
               {baseline.calibrated && cameraActive && (
                 <TruthMeter
                   position={truthMeterPosition}
                   tellCount={tells.length}
                 />
               )}
+
+              {/* Video Feed with Calibration Overlay */}
               <div className="relative">
                 {cameraActive && sessionId ? (
+                  // <CameraFeed
+                  //   sessionId={sessionId}
+                  //   calibrated={baseline.calibrated}
+                  //   onMetricsUpdate={handleFrontendMetrics}
+                  // />
                   <CameraFeed
                     sessionId={sessionId}
                     calibrated={baseline.calibrated}
                     onMetricsUpdate={handleFrontendMetrics}
+                    onVideoRecorded={(blob) => {
+                      console.log(
+                        "📹 Video received from CameraFeed, size:",
+                        blob.size
+                      );
+                      videoBlobRef.current = blob;
+                      setSessionVideoBlob(blob);
+                    }}
+                    onRecorderReady={(recorder) => {
+                      mediaRecorderRef.current = recorder;
+                      console.log("🎤 MediaRecorder ref saved");
+                    }}
                   />
                 ) : (
                   <div className="bg-gray-800 rounded-lg overflow-hidden relative">
@@ -1037,7 +1200,8 @@ export default function LieDetectorApp() {
                     </div>
                   </div>
                 )}
-                {/* Calibration Progress */}
+
+                {/* Calibration Progress - Top Right Corner Overlay */}
                 {cameraActive && isCalibrating && (
                   <div className="absolute top-3 right-3 bg-blue-900 bg-opacity-90 backdrop-blur-sm border border-blue-400 rounded-md px-3 py-2 shadow-lg z-10">
                     <div className="flex items-center gap-2">
@@ -1056,25 +1220,73 @@ export default function LieDetectorApp() {
                 )}
               </div>
 
-              {/* Overlay Face Model (Only during Calibration/Setup) */}
               {cameraActive && !isCalibrating && !baseline.calibrated && (
                 <div className="bg-gray-800 rounded-lg overflow-hidden relative">
                   <div className="aspect-video bg-gray-700 flex items-center justify-center relative">
-                    <div className="w-64 h-80 border-2 border-green-400 rounded-lg relative">
-                      {/* Mockup UI landmarks */}
-                      <div className="absolute top-20 left-16 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
-                      <div className="absolute top-20 right-16 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
-                      {lipCompression && (
-                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-yellow-500 px-4 py-2 rounded flex items-center gap-2">
-                          <AlertTriangle className="w-4 h-4" />{" "}
-                          <span className="text-sm font-semibold">
-                            Lip Compression
-                          </span>
-                        </div>
-                      )}
+                    <div className="relative">
+                      <div className="w-64 h-80 border-2 border-green-400 rounded-lg relative">
+                        {/* Mockup UI landmarks */}
+                        <div className="absolute top-20 left-16 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
+                        <div className="absolute top-20 right-16 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
+                        <div className="absolute top-32 left-1/2 -translate-x-1/2 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
+                        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 w-12 h-6 border-2 border-yellow-400 rounded-full"></div>
+
+                        {lipCompression && (
+                          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-yellow-500 px-4 py-2 rounded flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4" />
+                            <span className="text-sm font-semibold">
+                              Lip Compression
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
+              )}
+
+              {cameraActive && baseline.calibrated && (
+                <>
+                  {/* Heart Rate Display with Graph */}
+                  <div className="flex gap-4 items-center">
+                    {/* Current BPM */}
+                    <div
+                      className={`bg-gray-900 bg-opacity-80 rounded-lg p-4 flex items-center gap-3 ${getBpmColor()}`}
+                    >
+                      <Heart className="w-7 h-7" />
+                      <span className="text-3xl font-bold">
+                        {bpm.toFixed(1)} BPM
+                      </span>
+                      {baseline.calibrated && (
+                        <span className="text-sm font-semibold">
+                          (
+                          {(
+                            ((bpm - baseline.bpm) / baseline.bpm) *
+                            100
+                          ).toFixed(0)}
+                          %)
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Mini Graph */}
+                    <div className="bg-gray-900 bg-opacity-80 rounded-lg p-3">
+                      <svg width="280" height="70">
+                        <polyline
+                          fill="none"
+                          stroke="#10b981"
+                          strokeWidth="3"
+                          points={Array.from({ length: 50 }, (_, i) => {
+                            const x = i * 5.6;
+                            const y =
+                              35 + Math.sin(i * 0.3 + Date.now() * 0.01) * 20;
+                            return `${x},${y}`;
+                          }).join(" ")}
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                </>
               )}
 
               {/* Status Bar & Detection Tells */}
@@ -1086,50 +1298,33 @@ export default function LieDetectorApp() {
                       : stressColor.includes("yellow")
                       ? "bg-yellow-900 border-yellow-600"
                       : "bg-red-900 border-red-600"
-                  } border-2 rounded-lg p-4 flex items-center justify-between transition-colors duration-500`}
+                  } border-2 rounded-lg p-4 flex items-center justify-between`}
                 >
-                  {/* --- PHẦN ĐƯỢC CHỈNH SỬA: HIỂN THỊ LEVEL VÀ SCORE --- */}
-                  <div className="flex flex-col">
-                    <span className="text-lg font-bold uppercase tracking-wide">
+                  <div>
+                    <span className="text-lg font-bold">
                       {isCalibrating
-                        ? "Status: Calibrating..."
+                        ? "Status: Calibrating baseline..."
                         : baseline.calibrated
                         ? `Status: ${stressLevel}`
-                        : "Status: Ready"}
+                        : "Status: Ready to calibrate"}
                     </span>
-
-                    {/* Hiển thị dòng Score nếu đã Calibrate xong */}
-                    {baseline.calibrated && !isCalibrating && (
-                      <div className="text-sm font-medium mt-1 flex items-center gap-3 text-white/90">
-                        <span>Score: {stressScore.toFixed(0)}/100</span>
-
-                        {/* Thanh progress bar nhỏ minh họa Score */}
-                        <div className="w-24 h-2 bg-black/30 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-white/90 transition-all duration-500 ease-out"
-                            style={{ width: `${Math.min(100, stressScore)}%` }}
-                          ></div>
-                        </div>
-                      </div>
-                    )}
                   </div>
-
                   {analyzing && (
                     <div className="flex gap-1.5">
-                      <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
+                      <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
                       <div
-                        className="w-3 h-3 bg-white rounded-full animate-pulse"
+                        className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
                         style={{ animationDelay: "0.2s" }}
                       ></div>
                       <div
-                        className="w-3 h-3 bg-white rounded-full animate-pulse"
+                        className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
                         style={{ animationDelay: "0.4s" }}
                       ></div>
                     </div>
                   )}
                 </div>
 
-                {/* Detection Tells*/}
+                {/* Detection Tells */}
                 {tells.map((tell) => (
                   <div
                     key={tell.id}
@@ -1314,6 +1509,56 @@ export default function LieDetectorApp() {
           </div>
         )}
       </div>
+
+      {/* AI Analysis Modal - Shows on top of everything */}
+      {showAiAnalysis && aiAnalysis && (
+        <AIAnalysisModal
+          analysis={aiAnalysis}
+          onClose={() => {
+            setShowAiAnalysis(false);
+            setAiAnalysis(null);
+          }}
+        />
+      )}
+
+      {/* AI Analysis Loading Overlay */}
+      {isAnalyzingSession && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-gray-800 rounded-2xl p-8 shadow-2xl border border-purple-500/30 max-w-md animate-pulse">
+            <div className="flex flex-col items-center space-y-4">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <svg
+                    className="w-8 h-8 text-purple-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                    />
+                  </svg>
+                </div>
+              </div>
+              <div className="text-center">
+                <h3 className="text-xl font-bold text-white mb-2">
+                  AI Đang Phân Tích...
+                </h3>
+                <p className="text-gray-400 text-sm">
+                  Vui lòng đợi trong giây lát
+                </p>
+                <p className="text-purple-400 text-xs mt-2">
+                  AI đang xử lý dữ liệu phiên làm việc
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
