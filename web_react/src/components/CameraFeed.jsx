@@ -325,6 +325,10 @@ export default function CameraFeed({
         // Initialize FaceMesh
         const faceMesh = new FaceMesh({
           locateFile: (file) => {
+            // Force non-SIMD version to avoid WASM errors
+            if (file.includes('simd')) {
+              file = file.replace('_simd', '');
+            }
             return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
           },
         });
