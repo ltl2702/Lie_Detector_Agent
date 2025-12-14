@@ -9,8 +9,6 @@ import {
   History,
   Video,
   Square,
-  ShieldAlert,
-  Zap,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import api from "./services/api";
@@ -29,10 +27,9 @@ export default function LieDetectorApp() {
   const [calibrationProgress, setCalibrationProgress] = useState(0);
   const [sessionId, setSessionId] = useState(null);
 
-  // --- REFS CHO CALIBRATION (QUAN TRỌNG) ---
+  // REFS CHO CALIBRATION
   // Lưu metric mới nhất từ Camera gửi sang
   const latestMetricsRef = useRef({ blinkRate: 0, handTouchTotal: 0 });
-
   const prevMetricsRef = useRef(null);
   // Lưu giá trị tại thời điểm bắt đầu Calibrate để tính Delta
   const calibrationStartRef = useRef({ handTouchTotal: 0, startTime: 0 });
@@ -97,7 +94,6 @@ export default function LieDetectorApp() {
   // Alert system
   const [alerts, setAlerts] = useState([]);
   const [showAlert, setShowAlert] = useState(false);
-  const alertAudioRef = useRef(null);
 
   // Truth meter
   const [truthMeterPosition, setTruthMeterPosition] = useState(30);
@@ -228,7 +224,7 @@ export default function LieDetectorApp() {
     }
   };
 
-  // --- 6. LOGIC TÍNH STRESS LEVEL (Tích hợp thêm để hiển thị Score) ---
+  // LOGIC TÍNH STRESS LEVEL
   const calculateStressLevel = useCallback((metrics, bpmDelta) => {
     console.log("CALCULATE STRESS RUNNING", {
       blink: metrics.blinkRate,
@@ -246,7 +242,7 @@ export default function LieDetectorApp() {
       latestMetricsRef.current.bpm = metrics.bpm;
     }
 
-    // 1. Blink Score (Nhạy hơn)
+    // 1. Blink Score
     // Nếu Baseline là 15, thì > 25 là bắt đầu stress (Logic cũ > 35 quá cao)
     const blinkThresholdHigh = Math.max(25, baseline.blink_rate * 1.3);
     if (metrics.blinkRate > blinkThresholdHigh) score += 20;
@@ -339,9 +335,6 @@ export default function LieDetectorApp() {
 
     // 3. Logic phát hiện nói dối (Chỉ chạy khi đã Calibrate)
     if (baseline.calibrated && metrics.blinkRate !== undefined) {
-      // const normalRateMin = 10;
-      // const normalRateMax = 30;
-
       // Logic Blink Rate
       const highBlinkThreshold = Math.max(35, baseline.blink_rate * 1.5);
       if (metrics.blinkRate > highBlinkThreshold) {
@@ -381,7 +374,6 @@ export default function LieDetectorApp() {
     }
 
     // Tính toán Stress Score liên tục
-    // calculateStressLevel(metrics, Math.abs(bpm - baseline.bpm));
     const bpmDelta = metrics.bpm
       ? Math.abs(metrics.bpm - baseline.bpm)
       : Math.abs(bpm - baseline.bpm);
@@ -521,9 +513,6 @@ export default function LieDetectorApp() {
         bpm: backendBaseline.bpm || 68 + Math.random() * 14, // Giữ giả lập hoặc từ backend
         blink_rate: measuredBlinkRate, // Dữ liệu thật
         gaze_stability: backendBaseline.gaze_stability || 0.15,
-        // emotion: backendBaseline.emotion || "neutral",
-        // emotion: dominantEmotion, // Cảm xúc chủ đạo lúc calibrate
-        // emotion: maxEmo, // Ghi nhận Baseline Emotion là cảm xúc cao nhất lúc này
         emotion: calculatedBaselineEmotion, // Ghi nhận Baseline Emotion là cảm xúc cao nhất lúc này
         hand_baseline_count: measuredHandCount, // Dữ liệu thật
         calibrated: true,
@@ -542,201 +531,6 @@ export default function LieDetectorApp() {
     }
   };
 
-  // Real-time monitoring after calibration
-  // useEffect(() => {
-  //   if (cameraActive && !isCalibrating && baseline.calibrated) {
-  //     const interval = setInterval(() => {
-  //       // Update BPM with variation (Simulation)
-  //       setBpm((prev) => {
-  //         const variance = (Math.random() - 0.5) * 8;
-  //         const newBpm = Math.max(50, Math.min(95, prev + variance));
-  //         // Check for significant BPM change
-  //         const delta = Math.abs(newBpm - baseline.bpm);
-  //         if (delta > 10 && Math.random() > 0.7) {
-  //           const changeType = newBpm > baseline.bpm ? "increase" : "decrease";
-  //           addTell(
-  //             `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
-  //             "bpm"
-  //           );
-  //         }
-  //         return newBpm;
-  //       });
-
-  //       // Random lip & gaze simulation (Backup if camera misses)
-  //       if (Math.random() > 0.95) {
-  //         setLipCompression(true);
-  //         addTell("Lip compression detected", "lips");
-  //         setTimeout(() => setLipCompression(false), 2000);
-  //       }
-  //       if (Math.random() > 0.98) {
-  //         addTell("Gaze shift detected", "gaze");
-  //       }
-  //     }, 2000);
-
-  //     return () => clearInterval(interval);
-  //   }
-  // }, [cameraActive, isCalibrating, baseline]);
-
-  // // ========================================================================
-  // // CORE MONITORING & SIMULATION ENGINE
-  // // ========================================================================
-  // useEffect(() => {
-  //   // Chỉ chạy khi Camera Active, Đã Calibrate và Không đang Calibrate
-  //   if (cameraActive && !isCalibrating && baseline.calibrated) {
-  //     const interval = setInterval(() => {
-  //       // Lấy tất cả dữ liệu cần thiết từ Refs (để không phụ thuộc vào render cycle)
-  //       const currentMetrics = latestMetricsRef.current;
-  //       const currentStress = stressScoreRef.current || 0; // Stress hiện tại (0-100)
-
-  //       // ------------------------------------------------------------------
-  //       // 1. HEART RATE LOGIC (BPM) - "CHASE THE STRESS"
-  //       // ------------------------------------------------------------------
-  //       setBpm((prevBpm) => {
-  //         let nextBpm = prevBpm;
-  //         const realBpm = currentMetrics?.bpm;
-
-  //         // A. Ưu tiên dữ liệu thật (nếu tin cậy)
-  //         if (realBpm && realBpm > 45) {
-  //           // Smoothing: 80% số cũ + 20% số mới (tránh giật cục)
-  //           nextBpm = prevBpm * 0.8 + realBpm * 0.2;
-  //         }
-  //         // B. Nếu mất dữ liệu thật -> Giả lập dựa trên Stress Score
-  //         else {
-  //           const base = baseline.bpm || 70;
-  //           // Target: Stress càng cao, nhịp tim đích càng xa Baseline
-  //           // VD: Stress 0 -> Target = Base. Stress 100 -> Target = Base + 40.
-  //           const targetBpm = base + (currentStress / 100) * 40;
-
-  //           // Movement: Mỗi giây nhích 10% về phía Target (Tạo cảm giác tim tăng dần)
-  //           const distance = targetBpm - prevBpm;
-  //           nextBpm = prevBpm + distance * 0.1;
-
-  //           // Noise: Thêm nhiễu hô hấp tự nhiên (±1.5 nhịp)
-  //           nextBpm += (Math.random() - 0.5) * 3;
-  //         }
-
-  //         // C. Kiểm tra Alert BPM
-  //         // Dùng nextBpm vừa tính để so sánh ngay
-  //         const bpmDelta = nextBpm - baseline.bpm;
-  //         if (Math.abs(bpmDelta) > 10) {
-  //           // Ngưỡng: Lệch 10 nhịp so với Baseline
-  //           const type = bpmDelta > 0 ? "increase" : "decrease";
-  //           const sign = bpmDelta > 0 ? "+" : "";
-  //           addTell(
-  //             `Heart rate ${type} (${sign}${bpmDelta.toFixed(0)} BPM)`,
-  //             "bpm_monitor",
-  //             4
-  //           );
-  //         }
-
-  //         return Math.max(50, Math.min(160, nextBpm)); // Kẹp giá trị an toàn
-  //       });
-
-  //       // ------------------------------------------------------------------
-  //       // 2. BLINK RATE LOGIC - STRESS RESPONSE
-  //       // ------------------------------------------------------------------
-  //       // Lấy Blink Rate thật hoặc giả lập
-  //       let currentBlinkRate = currentMetrics?.blinkRate;
-
-  //       // Nếu không có dữ liệu thật, giả lập Blink Rate dựa trên Stress
-  //       if (!currentBlinkRate) {
-  //         // Stress thấp (0-30): Blink ổn định quanh Baseline (VD: 15-20)
-  //         // Stress cao (>60): Blink tăng vọt (Nervous) hoặc giảm sâu (Staring)
-  //         const baseBlink = baseline.blink_rate || 15;
-
-  //         if (currentStress > 60) {
-  //           // Nervous simulation: Tăng tốc độ chớp mắt
-  //           // Random biến động mạnh hơn khi stress cao
-  //           currentBlinkRate = baseBlink + Math.random() * 20;
-  //         } else {
-  //           // Normal simulation
-  //           currentBlinkRate = baseBlink + (Math.random() - 0.5) * 5;
-  //         }
-  //       }
-
-  //       // Logic Alert cho Blink
-  //       const blinkDelta = currentBlinkRate - baseline.blink_rate;
-
-  //       // Ngưỡng Alert: Tăng > 12 lần/phút (Lo lắng) hoặc Giảm < -8 (Nhìn chằm chằm)
-  //       if (blinkDelta > 12) {
-  //         addTell(
-  //           `Rapid Blinking (+${blinkDelta.toFixed(0)}/min)`,
-  //           "blink_high",
-  //           3
-  //         );
-  //       } else if (currentBlinkRate < 5 && baseline.blink_rate > 10) {
-  //         // Chỉ báo Staring nếu baseline vốn dĩ cao hơn 10
-  //         addTell(`Unusual Staring (< 5/min)`, "blink_low", 3);
-  //       }
-
-  //       // Cập nhật lại UI state cho mượt (nếu đang dùng số giả lập)
-  //       setBlinkMetrics((prev) => ({
-  //         ...prev,
-  //         rate: Math.round(currentBlinkRate),
-  //       }));
-
-  //       // ------------------------------------------------------------------
-  //       // 3. EMOTION LOGIC - REAL-TIME WORSENING DETECTION
-  //       // ------------------------------------------------------------------
-  //       if (currentMetrics?.emotionData) {
-  //         // Tính tổng điểm tiêu cực hiện tại (Fear + Angry + Disgust + Sad)
-  //         const currentNegScore =
-  //           (currentMetrics.emotionData.fear || 0) +
-  //           (currentMetrics.emotionData.angry || 0) +
-  //           (currentMetrics.emotionData.disgust || 0) +
-  //           (currentMetrics.emotionData.sad || 0);
-
-  //         // So sánh với dữ liệu của vòng lặp trước (Previous Frame)
-  //         if (prevMetricsRef.current && prevMetricsRef.current.emotionData) {
-  //           const prevNegScore =
-  //             (prevMetricsRef.current.emotionData.fear || 0) +
-  //             (prevMetricsRef.current.emotionData.angry || 0) +
-  //             (prevMetricsRef.current.emotionData.disgust || 0) +
-  //             (prevMetricsRef.current.emotionData.sad || 0);
-
-  //           const diff = currentNegScore - prevNegScore;
-
-  //           // Nếu tiêu cực tăng > 10% trong vòng 1 giây -> Cảnh báo ngay
-  //           if (diff > 10) {
-  //             // Tìm cảm xúc nào tăng mạnh nhất để báo cụ thể
-  //             const maxEmo = Object.entries(currentMetrics.emotionData).reduce(
-  //               (a, b) => (a[1] > b[1] ? a : b)
-  //             )[0];
-  //             if (["fear", "angry", "disgust"].includes(maxEmo)) {
-  //               addTell(
-  //                 `Emotion worsening (Spike in ${maxEmo.toUpperCase()})`,
-  //                 "emotion_worse",
-  //                 5
-  //               );
-  //             } else {
-  //               addTell(
-  //                 `Negative emotion detected (+${diff.toFixed(0)}%)`,
-  //                 "emotion_worse",
-  //                 4
-  //               );
-  //             }
-  //           }
-  //         }
-  //       }
-
-  //       // ------------------------------------------------------------------
-  //       // 4. CLEANUP & SAVE REF
-  //       // ------------------------------------------------------------------
-  //       // Lưu metrics hiện tại làm "Quá khứ" cho vòng lặp sau so sánh
-  //       if (currentMetrics) {
-  //         prevMetricsRef.current = {
-  //           ...currentMetrics,
-  //           bpm: currentMetrics.bpm, // Lưu ý: giữ bpm gốc nếu có
-  //         };
-  //       }
-  //     }, 1000); // CHU KỲ: 1 GIÂY (Đủ mượt cho UI)
-
-  //     return () => clearInterval(interval);
-  //   }
-  // }, [cameraActive, isCalibrating, baseline]);
-  // Lưu ý: Không đưa 'bpm' vào dependency array để tránh vòng lặp vô tận,
-  // chúng ta dùng functional update setBpm(prev => ...) là an toàn nhất.
-
   // useEffect: Monitor & Simulation (ADRENALINE MODE)
   useEffect(() => {
     // Chỉ chạy khi Camera Active, Đã Calibrate và Không đang Calibrate
@@ -746,9 +540,7 @@ export default function LieDetectorApp() {
         const currentMetrics = latestMetricsRef.current;
         const currentStress = stressScoreRef.current || 0; // Stress hiện tại (0-100)
 
-        // ------------------------------------------------------------------
         // 1. HEART RATE LOGIC (BPM) - "ADRENALINE RUSH"
-        // ------------------------------------------------------------------
         setBpm((prevBpm) => {
           let nextBpm = prevBpm;
           const realBpm = currentMetrics?.bpm;
@@ -757,11 +549,10 @@ export default function LieDetectorApp() {
           if (realBpm && realBpm > 45) {
             nextBpm = prevBpm * 0.8 + realBpm * 0.2;
           }
-          // B. Giả lập dựa trên Stress Score (Logic mới: Nhạy hơn)
+          // B. Giả lập dựa trên Stress Score
           else {
             const base = baseline.bpm || 70;
 
-            // --- CHANGE 1: TĂNG TRẦN (CEILING) ---
             // Stress 100 -> Tăng thêm 35 nhịp.
             // VD: Base 70 -> Target 105. (Đủ lớn để trigger alert > 10)
             // Với Medium Stress (50) -> Target ~ 87. Delta = 17 (> 10 -> Alert ngay)
@@ -810,9 +601,7 @@ export default function LieDetectorApp() {
           return Math.max(55, Math.min(160, nextBpm));
         });
 
-        // ------------------------------------------------------------------
-        // 2. BLINK RATE LOGIC (ĐỒNG BỘ VỚI STRESS)
-        // ------------------------------------------------------------------
+        // 2. BLINK RATE LOGIC
         let currentBlinkRate = currentMetrics?.blinkRate;
         if (!currentBlinkRate) {
           const baseBlink = baseline.blink_rate || 15;
@@ -848,9 +637,7 @@ export default function LieDetectorApp() {
           rate: Math.round(currentBlinkRate),
         }));
 
-        // ------------------------------------------------------------------
-        // 3. EMOTION LOGIC (Giữ nguyên - Đã tốt)
-        // ------------------------------------------------------------------
+        // 3. EMOTION LOGIC
         if (currentMetrics?.emotionData) {
           const currentNegScore =
             (currentMetrics.emotionData.fear || 0) +
@@ -900,7 +687,7 @@ export default function LieDetectorApp() {
     }
   }, [cameraActive, isCalibrating, baseline]);
 
-  // --- 7. LOGIC ADD TELL + COUNTDOWN (Tích hợp TTL) ---
+  // LOGIC ADD TELL + COUNTDOWN (Tích hợp TTL)
   const addTell = (message, type, ttl = 10) => {
     setTells((prev) => {
       // Chặn spam: Nếu đã có lỗi cùng loại trong list thì reset TTL của lỗi đó thay vì thêm mới
@@ -935,27 +722,12 @@ export default function LieDetectorApp() {
         const updated = prevTells
           .map((t) => ({ ...t, ttl: t.ttl - 1 }))
           .filter((t) => t.ttl > 0);
-        // updateTruthMeter(updated.length);
         return updated;
       });
     }, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Logic: Tính Deception Risk dựa trên số lượng Tells hiện tại
-  // useEffect(() => {
-  //   // Mỗi lỗi nhẹ +15%, lỗi nặng +25%. Tối đa 100%.
-  //   const risk = Math.min(
-  //     100,
-  //     tells.reduce((acc, tell) => {
-  //       const weight = ["fear", "bpm_spike", "blink_high"].includes(tell.type)
-  //         ? 25
-  //         : 15;
-  //       return acc + weight;
-  //     }, 0)
-  //   );
-  //   setDeceptionRisk(risk);
-  // }, [tells]);
   // Bước 1: Tính Deception Risk dựa trên mức độ nghiêm trọng của các Tells
   useEffect(() => {
     // Mỗi loại Tell có trọng số rủi ro khác nhau
@@ -1011,46 +783,9 @@ export default function LieDetectorApp() {
 
     const rawPosition = baseOffset + stressContribution + riskContribution;
 
-    // Hiệu ứng "Trễ" (Smoothing) để kim không giật cục
-    // Tuy nhiên trong React state đơn giản ta set trực tiếp,
-    // CSS transition ở component TruthMeter sẽ lo phần mượt mà.
+    // Hiệu ứng "Trễ" (Smoothing) để kim không giật cục. Tuy nhiên trong React state đơn giản ta set trực tiếp, CSS transition ở component TruthMeter sẽ lo phần mượt mà.
     setTruthMeterPosition(Math.min(100, Math.max(0, rawPosition)));
   }, [stressScore, deceptionRisk]);
-
-  // const updateTruthMeter = (tellCount) => {
-  //   const actualTells = Math.max(0, tellCount); // Đếm chính xác số lỗi hiện tại
-  //   const baseOffset = 30;
-  //   const tellMultiplier = 20; // Mỗi tell tăng 20 điểm
-  //   const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
-  //   setTruthMeterPosition(position);
-  // };
-
-  // // 3. THÊM useEffect MỚI: Tự động tính TruthMeter mỗi khi tells thay đổi
-  // useEffect(() => {
-  //   // Logic tính toán:
-  //   const actualTells = tells.length;
-
-  //   // Nếu bạn muốn giữ logic "Kim chỉ mức độ nói dối" (Càng cao càng dối):
-  //   const baseOffset = 20;
-  //   const tellMultiplier = 20;
-  //   const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
-
-  //   setTruthMeterPosition(position);
-  // }, [tells]); // Chỉ chạy khi tells thay đổi
-
-  // const triggerAlert = (data) => {
-  //   playAlertSound();
-  //   setShowAlert(true);
-  //   const alert = {
-  //     id: Date.now(),
-  //     message: data.message || "HIGH STRESS DETECTED",
-  //     confidence: data.confidence || 0.8,
-  //     indicators: data.indicators || [],
-  //     timestamp: Date.now(),
-  //   };
-  //   setAlerts((prev) => [alert, ...prev].slice(0, 3));
-  //   setTimeout(() => setShowAlert(false), 3000);
-  // };
 
   const triggerAlert = (data) => {
     playAlertSound();
@@ -1103,28 +838,6 @@ export default function LieDetectorApp() {
       console.error("Audio error:", error);
     }
   };
-
-  // const playAlertSound = () => {
-  //   try {
-  //     const audioContext = new (window.AudioContext ||
-  //       window.webkitAudioContext)();
-  //     const oscillator = audioContext.createOscillator();
-  //     const gainNode = audioContext.createGain();
-  //     oscillator.connect(gainNode);
-  //     gainNode.connect(audioContext.destination);
-  //     oscillator.frequency.value = 750;
-  //     oscillator.type = "sine";
-  //     gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-  //     gainNode.gain.exponentialRampToValueAtTime(
-  //       0.01,
-  //       audioContext.currentTime + 0.18
-  //     );
-  //     oscillator.start(audioContext.currentTime);
-  //     oscillator.stop(audioContext.currentTime + 0.18);
-  //   } catch (error) {
-  //     console.error("Error playing alert sound:", error);
-  //   }
-  // };
 
   const getBpmColor = () => {
     if (!baseline.calibrated) return "text-gray-400";
@@ -1364,48 +1077,6 @@ export default function LieDetectorApp() {
                 </div>
               )}
 
-              {/* Status & Tells */}
-              {/* {cameraActive && baseline.calibrated && (
-                <>
-                  <div className="flex gap-4 items-center">
-                    <div
-                      className={`bg-gray-900 bg-opacity-80 rounded-lg p-4 flex items-center gap-3 ${getBpmColor()}`}
-                    >
-                      <Heart className="w-7 h-7" />
-                      <span className="text-3xl font-bold">
-                        {bpm.toFixed(1)} BPM
-                      </span>
-                      {baseline.calibrated && (
-                        <span className="text-sm font-semibold">
-                          (
-                          {(
-                            ((bpm - baseline.bpm) / baseline.bpm) *
-                            100
-                          ).toFixed(0)}
-                          %)
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="bg-gray-900 bg-opacity-80 rounded-lg p-3">
-                      <svg width="280" height="70">
-                        <polyline
-                          fill="none"
-                          stroke="#10b981"
-                          strokeWidth="3"
-                          points={Array.from({ length: 50 }, (_, i) => {
-                            const x = i * 5.6;
-                            const y =
-                              35 + Math.sin(i * 0.3 + Date.now() * 0.01) * 20;
-                            return `${x},${y}`;
-                          }).join(" ")}
-                        />
-                      </svg>
-                    </div>
-                  </div>
-                </>
-              )} */}
-
               {/* Status Bar & Detection Tells */}
               <div className="space-y-3">
                 <div
@@ -1442,7 +1113,6 @@ export default function LieDetectorApp() {
                       </div>
                     )}
                   </div>
-                  {/* --------------------------------------------------- */}
 
                   {analyzing && (
                     <div className="flex gap-1.5">
@@ -1459,7 +1129,7 @@ export default function LieDetectorApp() {
                   )}
                 </div>
 
-                {/* Detection Tells (Giữ nguyên) */}
+                {/* Detection Tells*/}
                 {tells.map((tell) => (
                   <div
                     key={tell.id}
@@ -1477,7 +1147,6 @@ export default function LieDetectorApp() {
             </div>
 
             {/* Right Sidebar - Blink & Hand */}
-            {/* 3. RIGHT COLUMN: METRICS BREAKDOWN */}
             <div className="col-span-3 space-y-4">
               {/* Heart Rate */}
               <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">

@@ -134,14 +134,11 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     return (rightGaze + leftGaze) / 2;
   };
 
-  // --- THÊM: Load Model Hugging Face ---
+  // Load Model Hugging Face
   useEffect(() => {
     const loadModel = async () => {
       try {
         console.log("Loading Emotion Model...");
-        // Sử dụng pipeline image-classification
-        // Model gợi ý: 'Xenova/facial_emotions_image_detection' hoặc 'Xenova/emotion-english-distilroberta-base' (cho text),
-        // Cho hình ảnh, ta dùng model FER đã convert sang ONNX.
         const classifier = await pipeline(
           "image-classification",
           "Xenova/facial_emotions_image_detection"
@@ -156,7 +153,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
     loadModel();
   }, []);
 
-  // --- THÊM: Logic phân tích cảm xúc ---
+  // Logic phân tích cảm xúc
   const analyzeEmotion = async (videoElement, faceLandmarks) => {
     if (!classifierRef.current || !faceLandmarks) return null;
 
@@ -212,7 +209,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       const imageMap = tempCanvas.toDataURL("image/jpeg", 0.8);
 
       // 2. Chạy Model Inference
-      // const results = await classifierRef.current(imageMap);
       const results = await classifierRef.current(imageMap, { topk: 7 });
 
       // 3. Chuẩn hóa kết quả trả về format của App
@@ -236,7 +232,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       let maxPercent = 0;
 
       results.forEach((res) => {
-        // Map label từ model sang key của app (nếu cần)
+        // Map label từ model sang key của app
         const key = EMOTION_MAP[res.label] || res.label;
 
         if (emotionData.hasOwnProperty(key)) {
@@ -253,16 +249,11 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         }
       });
 
-      // (Log debug để kiểm tra)
-      // console.log("Calculated Emotion:", emotionData);
-
       return {
         emotionData,
         dominantEmotion,
         confidence: maxPercent / 100, // Trả về dạng 0.0-1.0
       };
-
-      // return { emotionData, dominantEmotion, confidence: maxScore };
     } catch (err) {
       console.error("Emotion analysis error:", err);
       return null;
@@ -410,23 +401,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       draw();
     };
 
-    // Helper: Calculate eye aspect ratio
-    // const getEyeAspectRatio = (landmarks, eyePoints) => {
-    //   const vertical1 = Math.hypot(
-    //     landmarks[eyePoints[1]].x - landmarks[eyePoints[3]].x,
-    //     landmarks[eyePoints[1]].y - landmarks[eyePoints[3]].y
-    //   );
-    //   const vertical2 = Math.hypot(
-    //     landmarks[eyePoints[2]].x - landmarks[eyePoints[0]].x,
-    //     landmarks[eyePoints[2]].y - landmarks[eyePoints[0]].y
-    //   );
-    //   const horizontal = Math.hypot(
-    //     landmarks[eyePoints[0]].x - landmarks[eyePoints[3]].x,
-    //     landmarks[eyePoints[0]].y - landmarks[eyePoints[3]].y
-    //   );
-    //   return (vertical1 + vertical2) / (2.0 * horizontal);
-    // };
-
     // Thay thế hàm cũ bằng hàm này
     const getEyeAspectRatio = (landmarks, eyePoints) => {
       // eyePoints thứ tự: [Top, Bottom, Inner, Outer]
@@ -520,7 +494,7 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           blinkCount: 0,
           currentHandToFace: false,
           handTouchTotal: 0,
-          emotionData: {}, // Trả về object rỗng hoặc default
+          emotionData: {},
           dominantEmotion: "neutral",
           emotionConfidence: 0,
           isLipCompressed: false,
@@ -528,7 +502,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         };
       }
 
-      // let blink = false;
       let handToFace = false;
       let lipCompression = false;
       let gazeShift = 0;
@@ -542,16 +515,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         resultsRef.current.face.multiFaceLandmarks
       ) {
         const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
-        // blink = isBlinking(landmarks);
-        // Tính EAR chi tiết để Debug
-        // const rightEAR = getEyeAspectRatio(landmarks, [159, 145, 133, 33]);
-        // const leftEAR = getEyeAspectRatio(landmarks, [386, 374, 362, 263]);
-        // currentEAR = (rightEAR + leftEAR) / 2;
-
-        // So sánh với ngưỡng
-        // if (currentEAR < EYE_BLINK_THRESHOLD) {
-        //   isBlinkingNow = true;
-        // }
         // Detect Blink
         isBlinkingNow = isBlinking(landmarks);
         // Logic đếm (Chỉ tăng khi chuyển từ Mở -> Nhắm và cooldown 300ms)
@@ -592,7 +555,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         );
       }
 
-      // CẬP NHẬT TỔNG SỐ LẦN (COUNT) THAY VÌ BUFFER FRAME
       // Cập nhật tổng số lần nháy mắt
       if (isBlinkingNow && !prevBlinkState.current) {
         if (now - lastBlinkTime.current > 300) {
@@ -636,18 +598,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       }
       prevHandState.current = isTouchingFaceNow;
 
-      // // Update buffers
-      // blinksBuffer.current.push(blink);
-      // handToFaceBuffer.current.push(handToFace);
-
-      // // Keep buffer size limited
-      // if (blinksBuffer.current.length > MAX_FRAMES) {
-      //   blinksBuffer.current.shift();
-      // }
-      // if (handToFaceBuffer.current.length > MAX_FRAMES) {
-      //   handToFaceBuffer.current.shift();
-      // }
-
       // Trigger Emotion Analysis mỗi 1 giây (30 frames)
       let aiEmotionResult = null;
       if (frameCountRef.current % 30 === 0 && resultsRef.current.face) {
@@ -678,10 +628,6 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
           )} (Threshold: ${EYE_BLINK_THRESHOLD})
           }`
         );
-        // const blinkCount = blinksBuffer.current.filter((b) => b).length;
-        // const handToFaceCount = handToFaceBuffer.current.filter(
-        //   (h) => h
-        // ).length;
 
         // Tính Rate bằng Sliding Window:
         // Lọc bỏ các timestamp cũ hơn 60s
@@ -703,21 +649,11 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
             ? Math.round(totalBlinks.current / minutesElapsed)
             : 0;
 
-        // const blinkRate = secondsRecorded > 0 ? (blinkCount / secondsRecorded) * 60 : 0;
-        // const handToFaceFreq = secondsRecorded > 0 ? (handToFaceCount / secondsRecorded) * 60 : 0;
-
         onMetricsUpdate({
-          // type: "basic_update",
           blinkRate: slidingWindowRate, // Tốc độ trung bình (lần/phút)
-          // blinkCount: totalBlinks.current, // Tổng số lần chớp từ đầu buổi
           blinkCount: currentCycleBlinks.current, // Tổng số lần chớp trong chu kỳ 60s hiện tại
-          // handToFaceFrequency: Math.round(handToFaceFreq * 10) / 10,
-          // currentBlink: blink,
-          // currentBlink: isBlinkingNow,
-          // currentHandToFace: handToFace,
           handTouchTotal: totalHandTouches.current,
           currentHandToFace: isTouchingFaceNow,
-          // handToFaceCount: totalHandTouches.current, // Tổng số lần chạm tay lên mặt
           isLipCompressed: lipCompression, // True/False
           gazeShiftIntensity: gazeShift, // Float (độ lớn của việc đảo mắt)
           frameCount: frameCountRef.current,
