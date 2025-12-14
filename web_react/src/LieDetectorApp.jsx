@@ -312,15 +312,15 @@ export default function LieDetectorApp() {
       setEmotionData({
         angry: 0,
         disgust: 0,
-        fear: 15,
-        happy: 5,
-        sad: 10,
-        surprise: 5,
-        neutral: 65,
+        fear: 0,
+        happy: 0,
+        sad: 0,
+        surprise: 0,
+        neutral: 0,
       });
       setDominantEmotion("neutral");
-      setEmotionConfidence(0.65);
-      setGestureScore(85);
+      setEmotionConfidence(0);
+      setGestureScore(0);
       
       // Reset detection state
       setTells([]);
