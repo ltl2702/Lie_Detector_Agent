@@ -12,12 +12,14 @@ import {
   Square,
 } from "lucide-react";
 import { io } from "socket.io-client";
+import axios from "axios";
 import api from "./services/api";
 import CameraFeed from "./components/CameraFeed";
 import TruthMeter from "./components/TruthMeter";
 import AlertSystem from "./components/AlertSystem";
 import ReviewMode from "./components/ReviewMode";
 import SessionHistory from "./components/SessionHistory";
+import AIAnalysisModal from "./components/AIAnalysisModal";
 
 export default function LieDetectorApp() {
   const [viewMode, setViewMode] = useState("live"); // 'live', 'history', 'review'
