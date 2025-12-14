@@ -1245,50 +1245,6 @@ export default function LieDetectorApp() {
                 </div>
               )}
 
-              {cameraActive && baseline.calibrated && (
-                <>
-                  {/* Heart Rate Display with Graph */}
-                  <div className="flex gap-4 items-center">
-                    {/* Current BPM */}
-                    <div
-                      className={`bg-gray-900 bg-opacity-80 rounded-lg p-4 flex items-center gap-3 ${getBpmColor()}`}
-                    >
-                      <Heart className="w-7 h-7" />
-                      <span className="text-3xl font-bold">
-                        {bpm.toFixed(1)} BPM
-                      </span>
-                      {baseline.calibrated && (
-                        <span className="text-sm font-semibold">
-                          (
-                          {(
-                            ((bpm - baseline.bpm) / baseline.bpm) *
-                            100
-                          ).toFixed(0)}
-                          %)
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Mini Graph */}
-                    <div className="bg-gray-900 bg-opacity-80 rounded-lg p-3">
-                      <svg width="280" height="70">
-                        <polyline
-                          fill="none"
-                          stroke="#10b981"
-                          strokeWidth="3"
-                          points={Array.from({ length: 50 }, (_, i) => {
-                            const x = i * 5.6;
-                            const y =
-                              35 + Math.sin(i * 0.3 + Date.now() * 0.01) * 20;
-                            return `${x},${y}`;
-                          }).join(" ")}
-                        />
-                      </svg>
-                    </div>
-                  </div>
-                </>
-              )}
-
               {/* Status Bar & Detection Tells */}
               <div className="space-y-3">
                 <div
