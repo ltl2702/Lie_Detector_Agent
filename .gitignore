@@ -5,6 +5,8 @@ src/__pycache__/
 docs
 *.avi
 *.json
+sessions/
+memory/
 src/venv/
 .vite
 recordings
