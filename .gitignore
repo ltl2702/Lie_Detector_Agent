@@ -6,3 +6,5 @@ docs
 *.avi
 *.json
 src/venv/
+recordings
+.vite
