@@ -1309,13 +1309,31 @@ export default function LieDetectorApp() {
                   </div>
                   {analyzing && (
                     <div className="flex gap-1.5">
-                      <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                      <div className={`w-3 h-3 ${
+                        isCalibrating || stressColor.includes("green")
+                          ? "bg-green-400"
+                          : stressColor.includes("yellow")
+                          ? "bg-yellow-400"
+                          : "bg-red-400"
+                      } rounded-full animate-pulse`}></div>
                       <div
-                        className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
+                        className={`w-3 h-3 ${
+                          isCalibrating || stressColor.includes("green")
+                            ? "bg-green-400"
+                            : stressColor.includes("yellow")
+                            ? "bg-yellow-400"
+                            : "bg-red-400"
+                        } rounded-full animate-pulse`}
                         style={{ animationDelay: "0.2s" }}
                       ></div>
                       <div
-                        className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
+                        className={`w-3 h-3 ${
+                          isCalibrating || stressColor.includes("green")
+                            ? "bg-green-400"
+                            : stressColor.includes("yellow")
+                            ? "bg-yellow-400"
+                            : "bg-red-400"
+                        } rounded-full animate-pulse`}
                         style={{ animationDelay: "0.4s" }}
                       ></div>
                     </div>
