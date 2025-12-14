@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Activity,
   Eye,
@@ -224,6 +224,67 @@ export default function LieDetectorApp() {
     }
   };
 
+  // --- 6. LOGIC TÍNH STRESS LEVEL (Tích hợp thêm để hiển thị Score) ---
+  const calculateStressLevel = useCallback((metrics, bpmDelta) => {
+    console.log("CALCULATE STRESS RUNNING", {
+      blink: metrics.blinkRate,
+      emotion: metrics.emotionData,
+      gaze: metrics.gazeShiftIntensity,
+      hand: metrics.currentHandToFace,
+      lip: metrics.isLipCompressed,
+    });
+
+    let score = 0;
+    // 1. Blink Score (Nhạy hơn)
+    // Nếu Baseline là 15, thì > 25 là bắt đầu stress (Logic cũ > 35 quá cao)
+    const blinkThresholdHigh = Math.max(25, baseline.blink_rate * 1.3);
+    if (metrics.blinkRate > blinkThresholdHigh) score += 20;
+    // Stare (Nhìn chằm chằm) cũng là dấu hiệu
+    if (metrics.blinkRate < 5 && metrics.blinkRate < baseline.blink_rate * 0.5)
+      score += 15;
+
+    // 2. Emotion Score
+    const fear = metrics.emotionData?.fear || 0;
+    const sad = metrics.emotionData?.sad || 0;
+    const angry = metrics.emotionData?.angry || 0;
+    const disgust = metrics.emotionData?.disgust || 0;
+
+    if (fear > 18) score += 35;
+    if (angry > 15) score += 20;
+    if (disgust > 10) score += 20;
+    if (sad > 15) score += 10;
+
+    // 3. BPM Score
+    if (bpmDelta > 15) score += 25; // Nhịp tim tăng 15 nhịp là nhiều
+    else if (bpmDelta > 8) score += 10;
+
+    // 4. Behavior Score
+    if (metrics.currentHandToFace) score += 15;
+    if (metrics.isLipCompressed) score += 15;
+    if (metrics.gazeShiftIntensity > 0.15) score += 10;
+
+    const finalScore = Math.min(100, score);
+    setStressScore(finalScore);
+
+    let newLevel = "LOW STRESS";
+    let newColor = "text-green-400";
+
+    if (finalScore >= 65) {
+      newLevel = "HIGH STRESS";
+      newColor = "text-red-500";
+    } else if (finalScore >= 35) {
+      newLevel = "MEDIUM STRESS";
+      newColor = "text-yellow-400";
+    }
+
+    setStressLevel(newLevel);
+    setStressColor(newColor);
+    setStressScore(finalScore);
+
+    // Log biến cục bộ, không log state
+    console.log(`Score: ${finalScore} -> Level: ${newLevel}`);
+  }, []);
+
   // Handle metrics calculated from frontend
   const handleFrontendMetrics = (metrics) => {
     console.log("Frontend metrics:", metrics);
@@ -305,10 +366,15 @@ export default function LieDetectorApp() {
       if (metrics.gazeShiftIntensity > 0.15) {
         addTell("Gaze shift detected", "gaze");
       }
-
-      // Tính toán Stress Score liên tục
-      calculateStressLevel(metrics, Math.abs(bpm - baseline.bpm));
     }
+
+    // Tính toán Stress Score liên tục
+    // calculateStressLevel(metrics, Math.abs(bpm - baseline.bpm));
+    const bpmDelta = metrics.bpm
+      ? Math.abs(metrics.bpm - baseline.bpm)
+      : Math.abs(bpm - baseline.bpm);
+
+    calculateStressLevel(metrics, bpmDelta);
   };
 
   // Hàm checkEmotionDeviation: So sánh Emotion hiện tại với Baseline Emotion
@@ -325,53 +391,6 @@ export default function LieDetectorApp() {
         );
       }
     });
-  };
-
-  // --- 6. LOGIC TÍNH STRESS LEVEL (Tích hợp thêm để hiển thị Score) ---
-  const calculateStressLevel = (metrics, bpmDelta) => {
-    let score = 0;
-    // 1. Blink Score (Nhạy hơn)
-    // Nếu Baseline là 15, thì > 25 là bắt đầu stress (Logic cũ > 35 quá cao)
-    const blinkThresholdHigh = Math.max(25, baseline.blink_rate * 1.3);
-    if (metrics.blinkRate > blinkThresholdHigh) score += 20;
-    // Stare (Nhìn chằm chằm) cũng là dấu hiệu
-    if (metrics.blinkRate < 5 && metrics.blinkRate < baseline.blink_rate * 0.5)
-      score += 15;
-
-    // 2. Emotion Score
-    if (metrics.dominantEmotion === "fear") score += 35; // Fear là dấu hiệu mạnh nhất
-    if (metrics.dominantEmotion === "disgust") score += 20;
-    if (metrics.dominantEmotion === "angry") score += 20;
-    if (metrics.dominantEmotion === "sad") score += 10;
-
-    // 3. BPM Score
-    if (bpmDelta > 15) score += 25; // Nhịp tim tăng 15 nhịp là nhiều
-    else if (bpmDelta > 8) score += 10;
-
-    // 4. Behavior Score
-    if (metrics.currentHandToFace) score += 15;
-    if (metrics.isLipCompressed) score += 15;
-    if (metrics.gazeShiftIntensity > 0.15) score += 10;
-
-    const finalScore = Math.min(100, score);
-    setStressScore(finalScore);
-
-    let newLevel = "LOW STRESS";
-    let newColor = "text-green-400";
-
-    if (finalScore >= 65) {
-      newLevel = "HIGH STRESS";
-      newColor = "text-red-500";
-    } else if (finalScore >= 35) {
-      newLevel = "MEDIUM STRESS";
-      newColor = "text-yellow-400";
-    }
-
-    setStressLevel(newLevel);
-    setStressColor(newColor);
-
-    // Log biến cục bộ, không log state
-    console.log(`Score: ${finalScore} -> Level: ${newLevel}`);
   };
 
   // Start calibration process

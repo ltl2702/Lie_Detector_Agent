@@ -432,6 +432,9 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
       // eyePoints thứ tự: [Top, Bottom, Inner, Outer]
       // Right eye: [159, 145, 133, 33]
       // Left eye: [386, 374, 362, 263]
+      if (!landmarks || landmarks.length === 0) {
+        return 0;
+      }
 
       const top = landmarks[eyePoints[0]];
       const bottom = landmarks[eyePoints[1]];
@@ -507,6 +510,22 @@ export default function CameraFeed({ sessionId, calibrated, onMetricsUpdate }) {
         );
         currentCycleBlinks.current = 0;
         cycleStartTime.current = now;
+      }
+
+      const landmarks = resultsRef.current.face.multiFaceLandmarks[0];
+
+      if (!landmarks || landmarks.length === 0) {
+        return {
+          blinkRate: 0,
+          blinkCount: 0,
+          currentHandToFace: false,
+          handTouchTotal: 0,
+          emotionData: {}, // Trả về object rỗng hoặc default
+          dominantEmotion: "neutral",
+          emotionConfidence: 0,
+          isLipCompressed: false,
+          gazeShiftIntensity: 0,
+        };
       }
 
       // let blink = false;
