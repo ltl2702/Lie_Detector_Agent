@@ -943,40 +943,100 @@ export default function LieDetectorApp() {
   }, []);
 
   // Logic: Tính Deception Risk dựa trên số lượng Tells hiện tại
+  // useEffect(() => {
+  //   // Mỗi lỗi nhẹ +15%, lỗi nặng +25%. Tối đa 100%.
+  //   const risk = Math.min(
+  //     100,
+  //     tells.reduce((acc, tell) => {
+  //       const weight = ["fear", "bpm_spike", "blink_high"].includes(tell.type)
+  //         ? 25
+  //         : 15;
+  //       return acc + weight;
+  //     }, 0)
+  //   );
+  //   setDeceptionRisk(risk);
+  // }, [tells]);
+  // Bước 1: Tính Deception Risk dựa trên mức độ nghiêm trọng của các Tells
   useEffect(() => {
-    // Mỗi lỗi nhẹ +15%, lỗi nặng +25%. Tối đa 100%.
-    const risk = Math.min(
-      100,
-      tells.reduce((acc, tell) => {
-        const weight = ["fear", "bpm_spike", "blink_high"].includes(tell.type)
-          ? 25
-          : 15;
-        return acc + weight;
-      }, 0)
-    );
-    setDeceptionRisk(risk);
+    // Mỗi loại Tell có trọng số rủi ro khác nhau
+    const risk = tells.reduce((acc, tell) => {
+      let weight = 0;
+
+      switch (tell.type) {
+        case "emotion_worse": // Cảm xúc tệ đi đột ngột
+        case "fear": // Sợ hãi
+          weight = 25;
+          break;
+        case "bpm_monitor": // Tim tăng/giảm đột ngột
+          weight = 20;
+          break;
+        case "blink_high": // Chớp mắt loạn xạ
+        case "blink_low": // Nhìn chằm chằm
+          weight = 15;
+          break;
+        case "lips": // Mím môi
+        case "gesture": // Sờ tay lên mặt
+        case "gaze": // Mắt đảo liên tục
+          weight = 10;
+          break;
+        default:
+          weight = 5;
+      }
+      return acc + weight;
+    }, 0);
+
+    // Kẹp giá trị 0-100
+    setDeceptionRisk(Math.min(100, risk));
   }, [tells]);
 
-  const updateTruthMeter = (tellCount) => {
-    const actualTells = Math.max(0, tellCount); // Đếm chính xác số lỗi hiện tại
-    const baseOffset = 30;
-    const tellMultiplier = 20; // Mỗi tell tăng 20 điểm
-    const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
-    setTruthMeterPosition(position);
-  };
-
-  // 3. THÊM useEffect MỚI: Tự động tính TruthMeter mỗi khi tells thay đổi
+  // Bước 2: Tính vị trí Kim (Truth Meter) dựa trên Risk + Stress
   useEffect(() => {
-    // Logic tính toán:
-    const actualTells = tells.length;
+    // Nếu chưa calibrate xong thì kim để mặc định ở mức an toàn
+    if (!baseline.calibrated) {
+      setTruthMeterPosition(20);
+      return;
+    }
+    // Công thức:
+    // - Base: 10 (Mặc định)
+    // - Stress Impact: 30% (Căng thẳng đóng góp 30% vào khả năng nói dối)
+    // - Risk Impact: 70% (Các dấu hiệu cụ thể đóng góp 70%)
 
-    // Nếu bạn muốn giữ logic "Kim chỉ mức độ nói dối" (Càng cao càng dối):
-    const baseOffset = 20;
-    const tellMultiplier = 20;
-    const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
+    // Ví dụ:
+    // - Người nói thật nhưng hồi hộp: Stress 80, Risk 10 -> Meter = 10 + 24 + 7 = 41 (Vùng Vàng/Xanh - Chưa kết luận nói dối)
+    // - Người nói dối bình tĩnh: Stress 30, Risk 80 -> Meter = 10 + 9 + 56 = 75 (Vùng Đỏ - Nói dối)
 
-    setTruthMeterPosition(position);
-  }, [tells]); // Chỉ chạy khi tells thay đổi
+    const stressContribution = stressScore * 0.3;
+    const riskContribution = deceptionRisk * 0.7;
+    const baseOffset = 10;
+
+    const rawPosition = baseOffset + stressContribution + riskContribution;
+
+    // Hiệu ứng "Trễ" (Smoothing) để kim không giật cục
+    // Tuy nhiên trong React state đơn giản ta set trực tiếp,
+    // CSS transition ở component TruthMeter sẽ lo phần mượt mà.
+    setTruthMeterPosition(Math.min(100, Math.max(0, rawPosition)));
+  }, [stressScore, deceptionRisk]);
+
+  // const updateTruthMeter = (tellCount) => {
+  //   const actualTells = Math.max(0, tellCount); // Đếm chính xác số lỗi hiện tại
+  //   const baseOffset = 30;
+  //   const tellMultiplier = 20; // Mỗi tell tăng 20 điểm
+  //   const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
+  //   setTruthMeterPosition(position);
+  // };
+
+  // // 3. THÊM useEffect MỚI: Tự động tính TruthMeter mỗi khi tells thay đổi
+  // useEffect(() => {
+  //   // Logic tính toán:
+  //   const actualTells = tells.length;
+
+  //   // Nếu bạn muốn giữ logic "Kim chỉ mức độ nói dối" (Càng cao càng dối):
+  //   const baseOffset = 20;
+  //   const tellMultiplier = 20;
+  //   const position = Math.min(100, baseOffset + actualTells * tellMultiplier);
+
+  //   setTruthMeterPosition(position);
+  // }, [tells]); // Chỉ chạy khi tells thay đổi
 
   // const triggerAlert = (data) => {
   //   playAlertSound();
