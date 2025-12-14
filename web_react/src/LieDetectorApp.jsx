@@ -37,6 +37,8 @@ export default function LieDetectorApp() {
   // Lưu giá trị tại thời điểm bắt đầu Calibrate để tính Delta
   const calibrationStartRef = useRef({ handTouchTotal: 0, startTime: 0 });
 
+  const stressScoreRef = useRef(0);
+
   // Ref để cộng dồn cảm xúc trong suốt quá trình calibrate
   const calibrationEmotionsAccRef = useRef({
     angry: 0,
@@ -274,6 +276,7 @@ export default function LieDetectorApp() {
 
     const finalScore = Math.min(100, score);
     setStressScore(finalScore);
+    stressScoreRef.current = finalScore;
 
     let newLevel = "LOW STRESS";
     let newColor = "text-green-400";
@@ -515,7 +518,7 @@ export default function LieDetectorApp() {
       setBaselineEmotion({ ...emotionData });
 
       const finalBaseline = {
-        bpm: backendBaseline.bpm || 70, // Giữ giả lập hoặc từ backend
+        bpm: backendBaseline.bpm || 68 + Math.random() * 14, // Giữ giả lập hoặc từ backend
         blink_rate: measuredBlinkRate, // Dữ liệu thật
         gaze_stability: backendBaseline.gaze_stability || 0.15,
         // emotion: backendBaseline.emotion || "neutral",
@@ -574,109 +577,328 @@ export default function LieDetectorApp() {
   //   }
   // }, [cameraActive, isCalibrating, baseline]);
 
-  // Real-time monitoring after calibration (LOGIC HYBRID: THỰC TẾ + BIẾN ĐỘNG TỰ NHIÊN)
+  // // ========================================================================
+  // // CORE MONITORING & SIMULATION ENGINE
+  // // ========================================================================
+  // useEffect(() => {
+  //   // Chỉ chạy khi Camera Active, Đã Calibrate và Không đang Calibrate
+  //   if (cameraActive && !isCalibrating && baseline.calibrated) {
+  //     const interval = setInterval(() => {
+  //       // Lấy tất cả dữ liệu cần thiết từ Refs (để không phụ thuộc vào render cycle)
+  //       const currentMetrics = latestMetricsRef.current;
+  //       const currentStress = stressScoreRef.current || 0; // Stress hiện tại (0-100)
+
+  //       // ------------------------------------------------------------------
+  //       // 1. HEART RATE LOGIC (BPM) - "CHASE THE STRESS"
+  //       // ------------------------------------------------------------------
+  //       setBpm((prevBpm) => {
+  //         let nextBpm = prevBpm;
+  //         const realBpm = currentMetrics?.bpm;
+
+  //         // A. Ưu tiên dữ liệu thật (nếu tin cậy)
+  //         if (realBpm && realBpm > 45) {
+  //           // Smoothing: 80% số cũ + 20% số mới (tránh giật cục)
+  //           nextBpm = prevBpm * 0.8 + realBpm * 0.2;
+  //         }
+  //         // B. Nếu mất dữ liệu thật -> Giả lập dựa trên Stress Score
+  //         else {
+  //           const base = baseline.bpm || 70;
+  //           // Target: Stress càng cao, nhịp tim đích càng xa Baseline
+  //           // VD: Stress 0 -> Target = Base. Stress 100 -> Target = Base + 40.
+  //           const targetBpm = base + (currentStress / 100) * 40;
+
+  //           // Movement: Mỗi giây nhích 10% về phía Target (Tạo cảm giác tim tăng dần)
+  //           const distance = targetBpm - prevBpm;
+  //           nextBpm = prevBpm + distance * 0.1;
+
+  //           // Noise: Thêm nhiễu hô hấp tự nhiên (±1.5 nhịp)
+  //           nextBpm += (Math.random() - 0.5) * 3;
+  //         }
+
+  //         // C. Kiểm tra Alert BPM
+  //         // Dùng nextBpm vừa tính để so sánh ngay
+  //         const bpmDelta = nextBpm - baseline.bpm;
+  //         if (Math.abs(bpmDelta) > 10) {
+  //           // Ngưỡng: Lệch 10 nhịp so với Baseline
+  //           const type = bpmDelta > 0 ? "increase" : "decrease";
+  //           const sign = bpmDelta > 0 ? "+" : "";
+  //           addTell(
+  //             `Heart rate ${type} (${sign}${bpmDelta.toFixed(0)} BPM)`,
+  //             "bpm_monitor",
+  //             4
+  //           );
+  //         }
+
+  //         return Math.max(50, Math.min(160, nextBpm)); // Kẹp giá trị an toàn
+  //       });
+
+  //       // ------------------------------------------------------------------
+  //       // 2. BLINK RATE LOGIC - STRESS RESPONSE
+  //       // ------------------------------------------------------------------
+  //       // Lấy Blink Rate thật hoặc giả lập
+  //       let currentBlinkRate = currentMetrics?.blinkRate;
+
+  //       // Nếu không có dữ liệu thật, giả lập Blink Rate dựa trên Stress
+  //       if (!currentBlinkRate) {
+  //         // Stress thấp (0-30): Blink ổn định quanh Baseline (VD: 15-20)
+  //         // Stress cao (>60): Blink tăng vọt (Nervous) hoặc giảm sâu (Staring)
+  //         const baseBlink = baseline.blink_rate || 15;
+
+  //         if (currentStress > 60) {
+  //           // Nervous simulation: Tăng tốc độ chớp mắt
+  //           // Random biến động mạnh hơn khi stress cao
+  //           currentBlinkRate = baseBlink + Math.random() * 20;
+  //         } else {
+  //           // Normal simulation
+  //           currentBlinkRate = baseBlink + (Math.random() - 0.5) * 5;
+  //         }
+  //       }
+
+  //       // Logic Alert cho Blink
+  //       const blinkDelta = currentBlinkRate - baseline.blink_rate;
+
+  //       // Ngưỡng Alert: Tăng > 12 lần/phút (Lo lắng) hoặc Giảm < -8 (Nhìn chằm chằm)
+  //       if (blinkDelta > 12) {
+  //         addTell(
+  //           `Rapid Blinking (+${blinkDelta.toFixed(0)}/min)`,
+  //           "blink_high",
+  //           3
+  //         );
+  //       } else if (currentBlinkRate < 5 && baseline.blink_rate > 10) {
+  //         // Chỉ báo Staring nếu baseline vốn dĩ cao hơn 10
+  //         addTell(`Unusual Staring (< 5/min)`, "blink_low", 3);
+  //       }
+
+  //       // Cập nhật lại UI state cho mượt (nếu đang dùng số giả lập)
+  //       setBlinkMetrics((prev) => ({
+  //         ...prev,
+  //         rate: Math.round(currentBlinkRate),
+  //       }));
+
+  //       // ------------------------------------------------------------------
+  //       // 3. EMOTION LOGIC - REAL-TIME WORSENING DETECTION
+  //       // ------------------------------------------------------------------
+  //       if (currentMetrics?.emotionData) {
+  //         // Tính tổng điểm tiêu cực hiện tại (Fear + Angry + Disgust + Sad)
+  //         const currentNegScore =
+  //           (currentMetrics.emotionData.fear || 0) +
+  //           (currentMetrics.emotionData.angry || 0) +
+  //           (currentMetrics.emotionData.disgust || 0) +
+  //           (currentMetrics.emotionData.sad || 0);
+
+  //         // So sánh với dữ liệu của vòng lặp trước (Previous Frame)
+  //         if (prevMetricsRef.current && prevMetricsRef.current.emotionData) {
+  //           const prevNegScore =
+  //             (prevMetricsRef.current.emotionData.fear || 0) +
+  //             (prevMetricsRef.current.emotionData.angry || 0) +
+  //             (prevMetricsRef.current.emotionData.disgust || 0) +
+  //             (prevMetricsRef.current.emotionData.sad || 0);
+
+  //           const diff = currentNegScore - prevNegScore;
+
+  //           // Nếu tiêu cực tăng > 10% trong vòng 1 giây -> Cảnh báo ngay
+  //           if (diff > 10) {
+  //             // Tìm cảm xúc nào tăng mạnh nhất để báo cụ thể
+  //             const maxEmo = Object.entries(currentMetrics.emotionData).reduce(
+  //               (a, b) => (a[1] > b[1] ? a : b)
+  //             )[0];
+  //             if (["fear", "angry", "disgust"].includes(maxEmo)) {
+  //               addTell(
+  //                 `Emotion worsening (Spike in ${maxEmo.toUpperCase()})`,
+  //                 "emotion_worse",
+  //                 5
+  //               );
+  //             } else {
+  //               addTell(
+  //                 `Negative emotion detected (+${diff.toFixed(0)}%)`,
+  //                 "emotion_worse",
+  //                 4
+  //               );
+  //             }
+  //           }
+  //         }
+  //       }
+
+  //       // ------------------------------------------------------------------
+  //       // 4. CLEANUP & SAVE REF
+  //       // ------------------------------------------------------------------
+  //       // Lưu metrics hiện tại làm "Quá khứ" cho vòng lặp sau so sánh
+  //       if (currentMetrics) {
+  //         prevMetricsRef.current = {
+  //           ...currentMetrics,
+  //           bpm: currentMetrics.bpm, // Lưu ý: giữ bpm gốc nếu có
+  //         };
+  //       }
+  //     }, 1000); // CHU KỲ: 1 GIÂY (Đủ mượt cho UI)
+
+  //     return () => clearInterval(interval);
+  //   }
+  // }, [cameraActive, isCalibrating, baseline]);
+  // Lưu ý: Không đưa 'bpm' vào dependency array để tránh vòng lặp vô tận,
+  // chúng ta dùng functional update setBpm(prev => ...) là an toàn nhất.
+
+  // useEffect: Monitor & Simulation (ADRENALINE MODE)
   useEffect(() => {
-    // Chỉ chạy khi Camera đang bật, không phải lúc đang Calibrate, và đã có Baseline
+    // Chỉ chạy khi Camera Active, Đã Calibrate và Không đang Calibrate
     if (cameraActive && !isCalibrating && baseline.calibrated) {
       const interval = setInterval(() => {
-        // 1. LẤY DỮ LIỆU TỪ REF
+        // Lấy dữ liệu từ Refs
         const currentMetrics = latestMetricsRef.current;
+        const currentStress = stressScoreRef.current || 0; // Stress hiện tại (0-100)
 
-        // Nếu chưa có metric nào thì bỏ qua
-        if (!currentMetrics) return;
+        // ------------------------------------------------------------------
+        // 1. HEART RATE LOGIC (BPM) - "ADRENALINE RUSH"
+        // ------------------------------------------------------------------
+        setBpm((prevBpm) => {
+          let nextBpm = prevBpm;
+          const realBpm = currentMetrics?.bpm;
 
-        // --- A. XỬ LÝ BPM (QUAN TRỌNG: FIX LỖI ĐỨNG IM 70) ---
-        let currentBpm = currentMetrics.bpm;
+          // A. Ưu tiên dữ liệu thật (nếu có và hợp lệ > 45)
+          if (realBpm && realBpm > 45) {
+            nextBpm = prevBpm * 0.8 + realBpm * 0.2;
+          }
+          // B. Giả lập dựa trên Stress Score (Logic mới: Nhạy hơn)
+          else {
+            const base = baseline.bpm || 70;
 
-        // Nếu Camera KHÔNG gửi BPM (hoặc gửi số rác < 45), ta dùng cơ chế giả lập biến động nhẹ
-        // để UI trông tự nhiên (nhịp tim người không bao giờ đứng yên tuyệt đối)
-        if (!currentBpm || currentBpm < 45) {
-          setBpm((prevBpm) => {
-            // Tạo dao động ngẫu nhiên từ -1.5 đến +1.5 bpm
-            const noise = (Math.random() - 0.5) * 3;
-            // Tạo lực hút về Baseline (để không bị lệch quá xa giá trị chuẩn)
-            const gravity = (baseline.bpm - prevBpm) * 0.1;
+            // --- CHANGE 1: TĂNG TRẦN (CEILING) ---
+            // Stress 100 -> Tăng thêm 35 nhịp.
+            // VD: Base 70 -> Target 105. (Đủ lớn để trigger alert > 10)
+            // Với Medium Stress (50) -> Target ~ 87. Delta = 17 (> 10 -> Alert ngay)
+            const stressFactor = (currentStress / 100) * 35;
+            const targetBpm = base + stressFactor;
 
-            let newBpm = prevBpm + noise + gravity;
-            // Kẹp giá trị trong khoảng hợp lý (ví dụ 55 - 130)
-            newBpm = Math.max(55, Math.min(130, newBpm));
+            const distance = targetBpm - prevBpm;
 
-            // Cập nhật biến cục bộ để dùng cho tính toán Alert bên dưới
-            currentBpm = newBpm;
-            return newBpm;
-          });
-        } else {
-          // Nếu có BPM thật thì dùng luôn
-          currentBpm = currentMetrics.bpm;
-          // (Lưu ý: setBpm đã được gọi bên trong handleFrontendMetrics nếu có dữ liệu thật,
-          // nhưng gọi lại ở đây để đồng bộ biến cục bộ nếu cần)
+            // --- CHANGE 2: TỐC ĐỘ PHẢN ỨNG (ADRENALINE) ---
+            let speed = 0.05; // Mặc định: Tăng chậm
+
+            // Nếu Stress đang cao (> 50) và Tim cần tăng -> Tăng tốc gấp 3 lần (0.15)
+            if (currentStress > 50 && distance > 0) {
+              speed = 0.15;
+            }
+            // Nếu Stress giảm -> Tim hồi phục từ từ
+            else if (distance < 0) {
+              speed = 0.1;
+            }
+
+            nextBpm = prevBpm + distance * speed;
+
+            // --- CHANGE 3: ĐỘ RUNG (JITTER) ---
+            // Stress càng cao, tim đập càng loạn (không đều)
+            // Low stress: ±1. High stress: ±3.5
+            const jitter = currentStress > 60 ? 3.5 : 1.2;
+            nextBpm += (Math.random() - 0.5) * jitter;
+          }
+
+          // C. Alert BPM
+          const bpmDelta = nextBpm - baseline.bpm;
+
+          // Ngưỡng Alert: Giữ nguyên 10, nhưng nhờ logic trên nên sẽ dễ chạm ngưỡng này hơn
+          if (Math.abs(bpmDelta) > 10) {
+            const type = bpmDelta > 0 ? "increase" : "decrease";
+            const sign = bpmDelta > 0 ? "+" : "";
+            // TTL 4s: Cảnh báo hiện lâu hơn một chút
+            addTell(
+              `Heart rate ${type} (${sign}${bpmDelta.toFixed(0)} BPM)`,
+              "bpm_monitor",
+              4
+            );
+          }
+
+          // Kẹp giá trị an toàn
+          return Math.max(55, Math.min(160, nextBpm));
+        });
+
+        // ------------------------------------------------------------------
+        // 2. BLINK RATE LOGIC (ĐỒNG BỘ VỚI STRESS)
+        // ------------------------------------------------------------------
+        let currentBlinkRate = currentMetrics?.blinkRate;
+        if (!currentBlinkRate) {
+          const baseBlink = baseline.blink_rate || 15;
+
+          // Nếu Stress > 50 (Medium/High): Blink rate bắt đầu biến động mạnh
+          if (currentStress > 50) {
+            // 70% cơ hội là chớp mắt nhanh (Nervous)
+            if (Math.random() > 0.3) {
+              currentBlinkRate = baseBlink + 10 + Math.random() * 15; // VD: 15 + 10 + rand = 25-40
+            } else {
+              // 30% cơ hội là nhìn chằm chằm (Staring - Cognitive Load)
+              currentBlinkRate = baseBlink - 8 + Math.random() * 4; // VD: 15 - 8 = 7
+            }
+          } else {
+            // Low stress: Ổn định
+            currentBlinkRate = baseBlink + (Math.random() - 0.5) * 4;
+          }
         }
 
-        // --- TÍNH DELTA ĐỂ CẢNH BÁO ---
-        // Lúc này currentBpm chắc chắn đã có giá trị (thật hoặc biến động)
-        const bpmDelta = currentBpm - baseline.bpm;
-
-        if (Math.abs(bpmDelta) > 5) {
-          const type = bpmDelta > 0 ? "increase" : "decrease";
-          const sign = bpmDelta > 0 ? "+" : "";
+        const blinkDelta = currentBlinkRate - baseline.blink_rate;
+        // Giảm ngưỡng Alert xuống một chút để nhạy hơn
+        if (blinkDelta > 10) {
           addTell(
-            `Heart rate ${type} (${sign}${bpmDelta.toFixed(1)} BPM)`,
-            "bpm_monitor",
+            `Rapid Blinking (+${blinkDelta.toFixed(0)}/min)`,
+            "blink_high",
             3
           );
+        } else if (currentBlinkRate < 6 && baseline.blink_rate > 12) {
+          addTell(`Unusual Staring (< 6/min)`, "blink_low", 3);
         }
+        setBlinkMetrics((prev) => ({
+          ...prev,
+          rate: Math.round(currentBlinkRate),
+        }));
 
-        // --- B. KIỂM TRA CẢM XÚC (EMOTION) ---
-        if (currentMetrics.emotionData) {
-          const currentNegativeScore =
+        // ------------------------------------------------------------------
+        // 3. EMOTION LOGIC (Giữ nguyên - Đã tốt)
+        // ------------------------------------------------------------------
+        if (currentMetrics?.emotionData) {
+          const currentNegScore =
             (currentMetrics.emotionData.fear || 0) +
             (currentMetrics.emotionData.angry || 0) +
             (currentMetrics.emotionData.disgust || 0) +
             (currentMetrics.emotionData.sad || 0);
 
-          // Logic so sánh xu hướng
           if (prevMetricsRef.current && prevMetricsRef.current.emotionData) {
-            const prevNeg =
+            const prevNegScore =
               (prevMetricsRef.current.emotionData.fear || 0) +
               (prevMetricsRef.current.emotionData.angry || 0) +
               (prevMetricsRef.current.emotionData.disgust || 0) +
               (prevMetricsRef.current.emotionData.sad || 0);
 
-            const diff = currentNegativeScore - prevNeg;
-            // Nếu tiêu cực tăng > 10% so với 2 giây trước
+            const diff = currentNegScore - prevNegScore;
             if (diff > 10) {
-              addTell(
-                `Emotion getting worse (+${diff.toFixed(0)}%)`,
-                "emotion_worse"
-              );
+              const maxEmo = Object.entries(currentMetrics.emotionData).reduce(
+                (a, b) => (a[1] > b[1] ? a : b)
+              )[0];
+              if (["fear", "angry", "disgust"].includes(maxEmo)) {
+                addTell(
+                  `Emotion worsening (Spike in ${maxEmo.toUpperCase()})`,
+                  "emotion_worse",
+                  5
+                );
+              } else {
+                addTell(
+                  `Negative emotion detected (+${diff.toFixed(0)}%)`,
+                  "emotion_worse",
+                  4
+                );
+              }
             }
           }
         }
 
-        // --- C. KIỂM TRA CHỚP MẮT (BLINK RATE) ---
-        const currentBlinkRate = currentMetrics.blinkRate || 0;
-        const blinkDelta = currentBlinkRate - baseline.blink_rate;
-
-        if (Math.abs(blinkDelta) > 8) {
-          const type = blinkDelta > 0 ? "increase" : "decrease";
-          const sign = blinkDelta > 0 ? "+" : "";
-          addTell(
-            `Blink rate ${type} (${sign}${blinkDelta.toFixed(0)}/min)`,
-            "blink_monitor"
-          );
+        // 4. CLEANUP
+        if (currentMetrics) {
+          prevMetricsRef.current = {
+            ...currentMetrics,
+            bpm: currentMetrics.bpm,
+          };
         }
-
-        // --- D. LƯU LẠI METRICS ĐỂ SO SÁNH LẦN SAU ---
-        // Lưu ý: Cập nhật lại bpm vào ref để vòng lặp sau có dữ liệu đúng
-        prevMetricsRef.current = {
-          ...currentMetrics,
-          bpm: currentBpm,
-        };
-      }, 2000); // Check mỗi 2 giây
+      }, 1000);
 
       return () => clearInterval(interval);
     }
-  }, [cameraActive, isCalibrating, baseline]); // Bỏ bpm khỏi dependency để tránh re-render loop
+  }, [cameraActive, isCalibrating, baseline]);
 
   // --- 7. LOGIC ADD TELL + COUNTDOWN (Tích hợp TTL) ---
   const addTell = (message, type, ttl = 10) => {
@@ -1083,11 +1305,9 @@ export default function LieDetectorApp() {
               )}
 
               {/* Status & Tells */}
-              {cameraActive && baseline.calibrated && (
+              {/* {cameraActive && baseline.calibrated && (
                 <>
-                  {/* Heart Rate Display with Graph */}
                   <div className="flex gap-4 items-center">
-                    {/* Current BPM */}
                     <div
                       className={`bg-gray-900 bg-opacity-80 rounded-lg p-4 flex items-center gap-3 ${getBpmColor()}`}
                     >
@@ -1107,7 +1327,6 @@ export default function LieDetectorApp() {
                       )}
                     </div>
 
-                    {/* Mini Graph */}
                     <div className="bg-gray-900 bg-opacity-80 rounded-lg p-3">
                       <svg width="280" height="70">
                         <polyline
@@ -1125,7 +1344,7 @@ export default function LieDetectorApp() {
                     </div>
                   </div>
                 </>
-              )}
+              )} */}
 
               {/* Status Bar & Detection Tells */}
               <div className="space-y-3">
