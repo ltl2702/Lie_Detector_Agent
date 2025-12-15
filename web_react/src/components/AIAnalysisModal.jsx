@@ -135,21 +135,50 @@ export default function AIAnalysisModal({ analysis, onClose }) {
                         key={idx}
                         className="flex items-start gap-3 text-gray-300"
                       >
-                        <span className="text-blue-400 text-xl flex-shrink-0">
-                          •
-                        </span>
+                        <span className="text-blue-400 text-xl flex-shrink-0">•</span>
                         <span className="leading-relaxed">{indicator}</span>
                       </li>
                     );
                   } else if (typeof indicator === "object") {
+                    // Try to extract time info
+                    let timeInfo = null;
+                    if (indicator.time_range) {
+                      timeInfo = `⏱️ ${indicator.time_range}`;
+                    } else if (indicator.time) {
+                      timeInfo = `⏱️ ${indicator.time}`;
+                    } else if (indicator.timestamp) {
+                      // Convert epoch seconds to mm:ss from session start if possible
+                      let t = Number(indicator.timestamp);
+                      let base = null;
+                      if (analysis.session_start_time) {
+                        base = Number(analysis.session_start_time);
+                      } else if (analysis.start_time) {
+                        base = Number(analysis.start_time);
+                      }
+                      if (!isNaN(t) && base && !isNaN(base)) {
+                        const rel = Math.max(0, t - base);
+                        const min = Math.floor(rel / 60);
+                        const sec = Math.floor(rel % 60).toString().padStart(2, '0');
+                        timeInfo = `⏱️ ${min}:${sec}`;
+                      } else if (!isNaN(t) && t < 100000) {
+                        // If already relative seconds
+                        const min = Math.floor(t / 60);
+                        const sec = Math.floor(t % 60).toString().padStart(2, '0');
+                        timeInfo = `⏱️ ${min}:${sec}`;
+                      } else if (!isNaN(t)) {
+                        // Fallback: show raw
+                        timeInfo = `⏱️ ${t}`;
+                      }
+                    }
                     return (
                       <li key={idx} className="flex items-start gap-3">
-                        <span className="text-blue-400 text-xl flex-shrink-0">
-                          •
-                        </span>
+                        <span className="text-blue-400 text-xl flex-shrink-0">•</span>
                         <div className="leading-relaxed">
-                          <div className="text-white font-semibold">
+                          <div className="text-white font-semibold flex items-center gap-2">
                             {indicator.indicator || "Dấu hiệu"}
+                            {timeInfo && (
+                              <span className="text-xs text-yellow-300 font-normal">{timeInfo}</span>
+                            )}
                           </div>
                           <div className="text-gray-400 text-sm mt-1">
                             {indicator.interpretation || ""}

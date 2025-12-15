@@ -437,6 +437,9 @@ def end_session(session_id):
             # Generate AI analysis
             print(f"🤖 Generating AI analysis for session {session_id}...")
             ai_analysis = analyze_session_with_ai(session_data)
+            # Đảm bảo luôn có session_start_time trong ai_analysis để frontend chuyển đổi thời gian
+            if isinstance(ai_analysis, dict):
+                ai_analysis['session_start_time'] = session_data.get('start_time')
             session_data['ai_analysis'] = ai_analysis
             
             # Save to sessions directory
@@ -788,15 +791,24 @@ YÊU CẦU PHÂN TÍCH:
 4. **LÝ DO CỤ THỂ**: Phân tích từng dấu hiệu và ý nghĩa của chúng
 5. **GỢI Ý HÀNH ĐỘNG**: Nếu tiếp tục, nên tập trung vào điểm nào?
 
+**LƯU Ý QUAN TRỌNG**:
+- Khi trả về key_indicators, hãy trả về DẠNG OBJECT, mỗi object gồm:
+    - indicator: mã loại dấu hiệu (ví dụ: "bpm", "gesture", "lips", "emotion_worse", ...)
+    - interpretation: giải thích ngắn gọn ý nghĩa hoặc nội dung dấu hiệu
+    Ví dụ:
+        {{"indicator": "bpm", "interpretation": "Heart rate increase"}},
+        {{"indicator": "gesture", "interpretation": "Hand-to-face contact"}}
+- KHÔNG trả về key_indicators dạng chuỗi tự do, chỉ trả về object như trên để hệ thống tự động mapping thời gian.
+
 Trả lời bằng JSON format:
 {{
-  "summary": "Tóm tắt ngắn gọn",
-  "suspicion_level": "LOW/MEDIUM/HIGH",
-  "suspicion_score": 0-100,
-  "recommendation": "Có nên tiếp tục thẩm vấn",
-  "reasoning": "Giải thích chi tiết tại sao",
-  "key_indicators": ["Dấu hiệu quan trọng 1", "Dấu hiệu 2"],
-  "suggested_questions": ["Câu hỏi nên hỏi thêm 1", "Câu hỏi 2"]
+    "summary": "Tóm tắt ngắn gọn",
+    "suspicion_level": "LOW/MEDIUM/HIGH",
+    "suspicion_score": 0-100,
+    "recommendation": "Có nên tiếp tục thẩm vấn",
+    "reasoning": "Giải thích chi tiết tại sao",
+    "key_indicators": [{{"indicator": "bpm", "interpretation": "Heart rate increase"}}, {{"indicator": "gesture", "interpretation": "Hand-to-face contact"}}],
+    "suggested_questions": ["Câu hỏi nên hỏi thêm 1", "Câu hỏi 2"]
 }}
 """
         
@@ -821,6 +833,52 @@ Trả lời bằng JSON format:
         try:
             analysis = json.loads(response_text)
             print(f"AI Analysis completed: {analysis.get('suspicion_level', 'UNKNOWN')}")
+
+            # --- ENRICH key_indicators with time info from tells ---
+            tells = session_data.get('tells', [])
+            tells_by_type = {}
+            for tell in tells:
+                ttype = tell.get('type')
+                if ttype:
+                    tells_by_type.setdefault(ttype, []).append(tell)
+
+            # Only enrich if key_indicators is a list
+            if isinstance(analysis.get('key_indicators'), list):
+                enriched = []
+                for indicator in analysis['key_indicators']:
+                    # If indicator is string, try to match with tells
+                    if isinstance(indicator, str):
+                        found = None
+                        if indicator in tells_by_type:
+                            found = tells_by_type[indicator][0]
+                        else:
+                            for tell in tells:
+                                if indicator.lower() in tell.get('message', '').lower():
+                                    found = tell
+                                    break
+                        if found:
+                            enriched.append({
+                                'indicator': indicator,
+                                'interpretation': found.get('message', ''),
+                                'timestamp': found.get('timestamp'),
+                            })
+                        else:
+                            enriched.append(indicator)
+                    elif isinstance(indicator, dict):
+                        # Map indicator_type sang indicator nếu có
+                        ttype = indicator.get('indicator') or indicator.get('indicator_type')
+                        found = None
+                        if ttype and ttype in tells_by_type:
+                            found = tells_by_type[ttype][0]
+                        if found and 'timestamp' not in indicator:
+                            indicator = dict(indicator)  # copy
+                            indicator['timestamp'] = found.get('timestamp')
+                            indicator['indicator'] = ttype
+                        enriched.append(indicator)
+                    else:
+                        enriched.append(indicator)
+                analysis['key_indicators'] = enriched
+
             return analysis
         except json.JSONDecodeError as json_err:
             print(f" Failed to parse Gemini response as JSON: {json_err}")
