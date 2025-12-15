@@ -30,6 +30,9 @@ export default function LieDetectorApp() {
   const [calibrationProgress, setCalibrationProgress] = useState(0);
   const [sessionId, setSessionId] = useState(null);
 
+  const lastTellTimeRef = useRef({});
+  const lastSilentTimeRef = useRef({});
+
   // REFS CHO CALIBRATION
   // Lưu metric mới nhất từ Camera gửi sang
   const latestMetricsRef = useRef({ blinkRate: 0, handTouchTotal: 0 });
@@ -59,6 +62,12 @@ export default function LieDetectorApp() {
     hand_baseline_count: 0, // Lưu số lần chạm trong lúc calibrate
     calibrated: false,
   });
+
+  const baselineRef = useRef(baseline);
+
+  useEffect(() => {
+    baselineRef.current = baseline;
+  }, [baseline]);
 
   // Real-time metrics
   const [bpm, setBpm] = useState(0);
@@ -508,6 +517,31 @@ export default function LieDetectorApp() {
     console.log(`Score: ${finalScore} -> Level: ${newLevel}`);
   }, []);
 
+  // Hàm chỉ gửi về Backend, không hiện lên giao diện
+  const sendSilentTell = (message, type, cooldownSeconds = 1) => {
+    const now = Date.now();
+    const lastTime = lastSilentTimeRef.current[type] || 0;
+
+    if (now - lastTime < cooldownSeconds * 1000) return;
+
+    lastSilentTimeRef.current[type] = now;
+
+    if (wsRef.current && wsRef.current.connected && sessionId) {
+      wsRef.current.emit("frontend_tell", {
+        session_id: sessionId,
+        type: type,
+        message: message,
+        timestamp: Date.now() / 1000,
+        is_silent: true,
+      });
+      // Log màu tím để dễ nhìn
+      console.log(
+        `%c📤 (Silent) Sent: [${type}] ${message}`,
+        "color: #d8b4fe; font-weight: bold"
+      );
+    }
+  };
+
   // Handle metrics calculated from frontend
   const handleFrontendMetrics = (metrics) => {
     console.log("Frontend metrics:", metrics);
@@ -548,14 +582,24 @@ export default function LieDetectorApp() {
     setLipCompression(metrics.isLipCompressed || false);
     setGazeDetected(metrics.gazeShiftIntensity > 0.15); // Cập nhật cho UI
 
+    const isCalibrated = baselineRef.current.calibrated;
+
     // 3. Logic phát hiện nói dối (Chỉ chạy khi đã Calibrate)
-    if (baseline.calibrated && metrics.blinkRate !== undefined) {
+    // if (baseline.calibrated && metrics.blinkRate !== undefined) {
+    if (isCalibrated && metrics.blinkRate !== undefined) {
+      console.log("🔍 Checking Silent Tells...", {
+        hand: metrics.currentHandToFace,
+        lip: metrics.isLipCompressed,
+        gaze: metrics.gazeShiftIntensity,
+      });
+
       // Logic Blink Rate
       const highBlinkThreshold = Math.max(35, baseline.blink_rate * 1.5);
       if (metrics.blinkRate > highBlinkThreshold) {
         addTell(
           `Rapid Blinking: ${metrics.blinkRate}/min (Nervousness)`,
-          "blink_high"
+          "blink",
+          56
         );
       }
 
@@ -567,24 +611,43 @@ export default function LieDetectorApp() {
       ) {
         addTell(
           `Unusual Staring: ${metrics.blinkRate}/min (Cognitive Load)`,
-          "blink_low"
+          "blink",
+          56
         );
       }
 
       // Hand-to-face contact
       // Chỉ báo warning, việc đếm số đã được xử lý ở CameraFeed và hiển thị qua handMetrics.count
+      // if (metrics.currentHandToFace) {
+      //   addTell("Hand-to-face contact detected", "gesture", 20);
+      // }
+
+      // // Lip Compression
+      // if (metrics.isLipCompressed) {
+      //   addTell("Lip compression detected", "lips", 20);
+      // }
+
+      // // Gaze Shift
+      // if (metrics.gazeShiftIntensity > 0.15) {
+      //   addTell("Gaze shift detected", "gaze", 20);
+      // }
+
       if (metrics.currentHandToFace) {
-        addTell("Hand-to-face contact detected", "gesture");
+        // Gửi về backend mỗi 2 giây nếu tay vẫn đang chạm mặt
+        // KHÔNG hiện alert trên màn hình
+        sendSilentTell("Hand-to-face contact detected", "gesture", 15);
       }
 
       // Lip Compression
       if (metrics.isLipCompressed) {
-        addTell("Lip compression detected", "lips");
+        // Gửi về backend mỗi 2 giây
+        sendSilentTell("Lip compression detected", "lips", 15);
       }
 
       // Gaze Shift
       if (metrics.gazeShiftIntensity > 0.15) {
-        addTell("Gaze shift detected", "gaze");
+        // Gửi về backend mỗi 1.5 giây
+        sendSilentTell("Gaze shift detected", "gaze", 15);
       }
     }
 
@@ -839,11 +902,18 @@ export default function LieDetectorApp() {
 
             if (shouldAlert) {
               const changeType = finalBpm > baseline.bpm ? "Surge" : "Drop"; // Dùng từ mạnh hơn "Increase"
+              // addTell(
+              //   `Heart rate ${changeType}: ${finalBpm.toFixed(
+              //     0
+              //   )} BPM (+${delta.toFixed(0)})`,
+              //   "bpm"
+              // );
               addTell(
                 `Heart rate ${changeType}: ${finalBpm.toFixed(
                   0
                 )} BPM (+${delta.toFixed(0)})`,
-                "bpm"
+                "bpm",
+                26
               );
             }
           }
@@ -877,10 +947,10 @@ export default function LieDetectorApp() {
           addTell(
             `Rapid Blinking (+${blinkDelta.toFixed(0)}/min)`,
             "blink_high",
-            3
+            15
           );
         } else if (currentBlinkRate < 6 && baseline.blink_rate > 12) {
-          addTell(`Unusual Staring (< 6/min)`, "blink_low", 3);
+          addTell(`Unusual Staring (< 6/min)`, "blink_low", 17);
         }
         setBlinkMetrics((prev) => ({
           ...prev,
@@ -911,13 +981,13 @@ export default function LieDetectorApp() {
                 addTell(
                   `Emotion worsening (Spike in ${maxEmo.toUpperCase()})`,
                   "emotion_worse",
-                  5
+                  25
                 );
               } else {
                 addTell(
                   `Negative emotion detected (+${diff.toFixed(0)}%)`,
                   "emotion_worse",
-                  4
+                  28
                 );
               }
             }
@@ -957,22 +1027,68 @@ export default function LieDetectorApp() {
     return () => clearInterval(interval);
   }, [tells.length, cameraActive]);
 
-  const addTell = (message, type) => {
+  // const addTell = (message, type) => {
+  //   const newTell = {
+  //     id: Date.now() + Math.random(),
+  //     timestamp: Date.now() / 1000,
+  //     message,
+  //     type,
+  //     ttl: 10, // 10 seconds
+  //   };
+
+  //   setTells((prev) => {
+  //     // Remove existing tell of same type
+  //     const filtered = prev.filter((t) => t.type !== type);
+  //     return [...filtered, newTell];
+  //   });
+
+  //   // Backend: Send EVERY tell occurrence (including duplicates) for accurate counting
+  //   if (wsRef.current && wsRef.current.connected && sessionId) {
+  //     wsRef.current.emit("frontend_tell", {
+  //       session_id: sessionId,
+  //       type: type,
+  //       message: message,
+  //       timestamp: newTell.timestamp,
+  //     });
+  //     console.log("📤 Tell sent to backend:", type, message);
+  //   }
+
+  //   // Update truth meter based on tells count
+  //   updateTruthMeter(tells.length + 1);
+  // };
+
+  // Hàm addTell MỚI: Tự động chặn spam
+  const addTell = (message, type, cooldownSeconds = 5) => {
+    const now = Date.now();
+    // Lấy thời gian lần cuối loại này xuất hiện (nếu chưa có thì là 0)
+    const lastTime = lastTellTimeRef.current[type] || 0;
+
+    // Tính khoảng cách thời gian
+    const timeDiff = now - lastTime;
+
+    // CHẶN SPAM: Nếu chưa qua thời gian cooldown -> HỦY LUÔN
+    if (timeDiff < cooldownSeconds * 1000) {
+      return;
+    }
+
+    // Nếu OK, cập nhật lại thời gian mới nhất
+    lastTellTimeRef.current[type] = now;
+
     const newTell = {
       id: Date.now() + Math.random(),
       timestamp: Date.now() / 1000,
       message,
       type,
-      ttl: 10, // 10 seconds
+      ttl: 10,
     };
 
     setTells((prev) => {
-      // Remove existing tell of same type
+      // Xóa thông báo cũ cùng loại để danh sách gọn gàng
       const filtered = prev.filter((t) => t.type !== type);
       return [...filtered, newTell];
     });
 
-    // Backend: Send EVERY tell occurrence (including duplicates) for accurate counting
+    // Gửi về Backend
     if (wsRef.current && wsRef.current.connected && sessionId) {
       wsRef.current.emit("frontend_tell", {
         session_id: sessionId,
@@ -980,10 +1096,9 @@ export default function LieDetectorApp() {
         message: message,
         timestamp: newTell.timestamp,
       });
-      console.log("📤 Tell sent to backend:", type, message);
+      console.log(`📤 Tell sent to backend [${type}]:`, message);
     }
 
-    // Update truth meter based on tells count
     updateTruthMeter(tells.length + 1);
   };
 
