@@ -498,6 +498,30 @@ export default function LieDetectorApp() {
     setStressScore(finalScore);
     stressScoreRef.current = finalScore;
 
+    setTruthMeterPosition((prev) => {
+      let target = 30; // Mặc định ở vùng Truth
+
+      if (finalScore >= 65) {
+        // [HIGH STRESS] -> Ép kim vào vùng LIE (85% - 100%)
+        // Công thức: 85 + phần dư của score. Ví dụ score 70 -> 90%
+        target = 85 + (finalScore - 65) * 1.5;
+      } else if (finalScore >= 35) {
+        // [MEDIUM STRESS] -> Ép kim vào vùng NGHI VẤN (55% - 80%)
+        // Map khoảng điểm 35-65 sang khoảng vị trí 55-80
+        const percentage = (finalScore - 35) / 30; // 0.0 -> 1.0
+        target = 55 + percentage * 25;
+      } else {
+        // [LOW STRESS] -> Giữ ở vùng AN TOÀN (15% - 45%)
+        target = 15 + (finalScore / 35) * 30;
+      }
+
+      // Đảm bảo không vượt quá 100
+      target = Math.min(100, Math.max(10, target));
+
+      // Di chuyển nhanh hơn (0.15) để người dùng thấy kim vọt lên liền
+      return prev + (target - prev) * 0.15;
+    });
+
     let newLevel = "LOW STRESS";
     let newColor = "text-green-400";
 
@@ -633,20 +657,20 @@ export default function LieDetectorApp() {
       // }
 
       if (metrics.currentHandToFace) {
-        // Gửi về backend mỗi 2 giây nếu tay vẫn đang chạm mặt
+        // Gửi về backend mỗi 15 giây nếu tay vẫn đang chạm mặt
         // KHÔNG hiện alert trên màn hình
         sendSilentTell("Hand-to-face contact detected", "gesture", 15);
       }
 
       // Lip Compression
       if (metrics.isLipCompressed) {
-        // Gửi về backend mỗi 2 giây
+        // Gửi về backend mỗi 15 giây
         sendSilentTell("Lip compression detected", "lips", 15);
       }
 
       // Gaze Shift
       if (metrics.gazeShiftIntensity > 0.15) {
-        // Gửi về backend mỗi 1.5 giây
+        // Gửi về backend mỗi 15 giây
         sendSilentTell("Gaze shift detected", "gaze", 15);
       }
     }
@@ -901,17 +925,10 @@ export default function LieDetectorApp() {
               delta > 20 ? Math.random() > 0.1 : Math.random() > 0.4;
 
             if (shouldAlert) {
-              const changeType = finalBpm > baseline.bpm ? "Surge" : "Drop"; // Dùng từ mạnh hơn "Increase"
-              // addTell(
-              //   `Heart rate ${changeType}: ${finalBpm.toFixed(
-              //     0
-              //   )} BPM (+${delta.toFixed(0)})`,
-              //   "bpm"
-              // );
+              const changeType =
+                finalBpm > baseline.bpm ? "increase" : "decrease";
               addTell(
-                `Heart rate ${changeType}: ${finalBpm.toFixed(
-                  0
-                )} BPM (+${delta.toFixed(0)})`,
+                `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
                 "bpm",
                 26
               );
@@ -1099,7 +1116,7 @@ export default function LieDetectorApp() {
       console.log(`📤 Tell sent to backend [${type}]:`, message);
     }
 
-    updateTruthMeter(tells.length + 1);
+    // updateTruthMeter(tells.length + 1);
   };
 
   const updateTruthMeter = (tellCount) => {

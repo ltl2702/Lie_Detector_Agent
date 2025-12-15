@@ -74,6 +74,8 @@ export default function CameraFeed({
   // THÊM CÁC REF ĐỂ THEO DÕI TRẠNG THÁI CŨ (để phát hiện thay đổi)
   const prevBlinkState = useRef(false);
   const prevHandState = useRef(false);
+  const lastBlinkRateUpdateRef = useRef(Date.now()); // Mốc thời gian cập nhật UI gần nhất
+  const frozenBlinkRateRef = useRef(0); // Giá trị Rate đang hiển thị (bị đóng băng)
 
   // Ref để đếm tổng số lần (Count) thay vì Buffer frame
   const totalBlinks = useRef(0);
@@ -326,8 +328,8 @@ export default function CameraFeed({
         const faceMesh = new FaceMesh({
           locateFile: (file) => {
             // Force non-SIMD version to avoid WASM errors
-            if (file.includes('simd')) {
-              file = file.replace('_simd', '');
+            if (file.includes("simd")) {
+              file = file.replace("_simd", "");
             }
             return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
           },
@@ -872,6 +874,21 @@ export default function CameraFeed({
         // Rate = Số lượng blink còn lại trong cửa sổ 60s
         let slidingWindowRate = blinkTimestamps.current.length;
 
+        // Kiểm tra nếu đã qua 60 giây kể từ lần cập nhật UI cuối cùng
+        if (now - lastBlinkRateUpdateRef.current >= 60000) {
+          // Cập nhật giá trị hiển thị bằng giá trị thực tế hiện tại
+          frozenBlinkRateRef.current = slidingWindowRate;
+
+          // Reset mốc thời gian
+          lastBlinkRateUpdateRef.current = now;
+
+          console.log(
+            "⏱️ 1 Minute Update: Blink Rate UI updated to",
+            slidingWindowRate
+          );
+        }
+        // Nếu chưa đủ 60s, frozenBlinkRateRef.current vẫn giữ giá trị cũ (ban đầu là 0)
+
         // Calculate per minute rates
         const secondsRecorded = blinksBuffer.current.length / 30;
         // Tính phút đã trôi qua để tính tốc độ chớp mắt trung bình
@@ -884,7 +901,8 @@ export default function CameraFeed({
             : 0;
 
         onMetricsUpdate({
-          blinkRate: slidingWindowRate, // Tốc độ trung bình (lần/phút)
+          // blinkRate: slidingWindowRate, // Tốc độ trung bình (lần/phút)
+          blinkRate: frozenBlinkRateRef.current, // Tốc độ hiển thị (lần/phút) - cập nhật mỗi 60s
           blinkCount: currentCycleBlinks.current, // Tổng số lần chớp trong chu kỳ 60s hiện tại
           handTouchTotal: totalHandTouches.current,
           currentHandToFace: isTouchingFaceNow,
