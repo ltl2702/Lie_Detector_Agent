@@ -1599,33 +1599,28 @@ export default function LieDetectorApp() {
                   )}
                 </div>
                 {/* Visual Indicator */}
-                {areModelsReady && (
-                  <div>
-                    <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-500 ${
-                          blinkMetrics.rate > 35
-                            ? "bg-red-500"
-                            : blinkMetrics.rate < 5
-                            ? "bg-yellow-500"
-                            : "bg-green-500"
-                        }`}
-                        style={{
-                          width: `${Math.min(
-                            100,
-                            (blinkMetrics.rate / 50) * 100
-                          )}%`,
-                        }}
-                      ></div>
-                    </div>
-
-                    <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-                      <span>Stare</span>
-                      <span>Normal</span>
-                      <span>Panic</span>
-                    </div>
-                  </div>
-                )}
+                <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-500 ${
+                      blinkMetrics.rate > 35
+                        ? "bg-red-500"
+                        : blinkMetrics.rate < 5
+                        ? "bg-yellow-500"
+                        : "bg-green-500"
+                    }`}
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        (blinkMetrics.rate / 50) * 100
+                      )}%`,
+                    }}
+                  ></div>
+                </div>
+                <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                  <span>Stare</span>
+                  <span>Normal</span>
+                  <span>Panic</span>
+                </div>
               </div>
 
               {/* Behavioral Flags */}
