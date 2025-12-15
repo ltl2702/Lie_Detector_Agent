@@ -40,6 +40,9 @@ export default function LieDetectorApp() {
   // Lưu giá trị tại thời điểm bắt đầu Calibrate để tính Delta
   const calibrationStartRef = useRef({ handTouchTotal: 0, startTime: 0 });
 
+  // STATE THEO DÕI TRẠNG THÁI MODEL
+  const [areModelsReady, setAreModelsReady] = useState(false);
+
   const stressScoreRef = useRef(0);
 
   // Ref để cộng dồn cảm xúc trong suốt quá trình calibrate
@@ -182,7 +185,7 @@ export default function LieDetectorApp() {
   // Handle ending session
   const handleEndSession = async () => {
     if (!sessionId) return;
-
+    setAreModelsReady(false);
     const confirmEnd = window.confirm(
       "Are you sure you want to end this session? The video will be saved."
     );
@@ -607,6 +610,9 @@ export default function LieDetectorApp() {
     setGazeDetected(metrics.gazeShiftIntensity > 0.15); // Cập nhật cho UI
 
     const isCalibrated = baselineRef.current.calibrated;
+    if (!isCalibrated || isCalibrating) {
+      return;
+    }
 
     // 3. Logic phát hiện nói dối (Chỉ chạy khi đã Calibrate)
     // if (baseline.calibrated && metrics.blinkRate !== undefined) {
@@ -703,6 +709,7 @@ export default function LieDetectorApp() {
   const startCalibration = async () => {
     try {
       setCameraActive(true);
+      setAreModelsReady(false);
       setIsCalibrating(true);
       setCalibrationProgress(0);
       setTells([]);
@@ -840,7 +847,8 @@ export default function LieDetectorApp() {
   // useEffect: Monitor & Simulation (ADRENALINE MODE)
   useEffect(() => {
     // Chỉ chạy khi Camera Active, Đã Calibrate và Không đang Calibrate
-    if (cameraActive && !isCalibrating && baseline.calibrated) {
+    // if (cameraActive && !isCalibrating && baseline.calibrated) {
+    if (cameraActive && areModelsReady) {
       const interval = setInterval(() => {
         // Lấy dữ liệu từ Refs
         const currentMetrics = latestMetricsRef.current;
@@ -917,95 +925,99 @@ export default function LieDetectorApp() {
           // Ngưỡng cũ là 15, giờ giảm xuống 10 là bắt đầu cảnh báo
           const alertThreshold = 10;
 
-          if (delta > alertThreshold) {
-            // Logic mới:
-            // Nếu chênh lệch quá lớn (> 20) -> Luôn hiện cảnh báo (hoặc 90% cơ hội)
-            // Nếu chênh lệch vừa (> 10) -> 60% cơ hội (cũ là 20% -> quá ít)
-            const shouldAlert =
-              delta > 20 ? Math.random() > 0.1 : Math.random() > 0.4;
+          if (baseline.calibrated && !isCalibrating) {
+            if (delta > alertThreshold) {
+              // Logic mới:
+              // Nếu chênh lệch quá lớn (> 20) -> Luôn hiện cảnh báo (hoặc 90% cơ hội)
+              // Nếu chênh lệch vừa (> 10) -> 60% cơ hội (cũ là 20% -> quá ít)
+              const shouldAlert =
+                delta > 20 ? Math.random() > 0.1 : Math.random() > 0.4;
 
-            if (shouldAlert) {
-              const changeType =
-                finalBpm > baseline.bpm ? "increase" : "decrease";
-              addTell(
-                `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
-                "bpm",
-                26
-              );
+              if (shouldAlert) {
+                const changeType =
+                  finalBpm > baseline.bpm ? "increase" : "decrease";
+                addTell(
+                  `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
+                  "bpm",
+                  26
+                );
+              }
             }
           }
 
           return finalBpm;
         });
 
-        // 2. BLINK RATE LOGIC
-        let currentBlinkRate = currentMetrics?.blinkRate;
-        if (!currentBlinkRate) {
-          const baseBlink = baseline.blink_rate || 15;
+        if (baseline.calibrated && !isCalibrating) {
+          // 2. BLINK RATE LOGIC
+          let currentBlinkRate = currentMetrics?.blinkRate;
+          if (!currentBlinkRate) {
+            const baseBlink = baseline.blink_rate || 15;
 
-          // Nếu Stress > 50 (Medium/High): Blink rate bắt đầu biến động mạnh
-          if (currentStress > 50) {
-            // 70% cơ hội là chớp mắt nhanh (Nervous)
-            if (Math.random() > 0.3) {
-              currentBlinkRate = baseBlink + 10 + Math.random() * 15; // VD: 15 + 10 + rand = 25-40
-            } else {
-              // 30% cơ hội là nhìn chằm chằm (Staring - Cognitive Load)
-              currentBlinkRate = baseBlink - 8 + Math.random() * 4; // VD: 15 - 8 = 7
-            }
-          } else {
-            // Low stress: Ổn định
-            currentBlinkRate = baseBlink + (Math.random() - 0.5) * 4;
-          }
-        }
-
-        const blinkDelta = currentBlinkRate - baseline.blink_rate;
-        // Giảm ngưỡng Alert xuống một chút để nhạy hơn
-        if (blinkDelta > 10) {
-          addTell(
-            `Rapid Blinking (+${blinkDelta.toFixed(0)}/min)`,
-            "blink_high",
-            15
-          );
-        } else if (currentBlinkRate < 6 && baseline.blink_rate > 12) {
-          addTell(`Unusual Staring (< 6/min)`, "blink_low", 17);
-        }
-        setBlinkMetrics((prev) => ({
-          ...prev,
-          rate: Math.round(currentBlinkRate),
-        }));
-
-        // 3. EMOTION LOGIC
-        if (currentMetrics?.emotionData) {
-          const currentNegScore =
-            (currentMetrics.emotionData.fear || 0) +
-            (currentMetrics.emotionData.angry || 0) +
-            (currentMetrics.emotionData.disgust || 0) +
-            (currentMetrics.emotionData.sad || 0);
-
-          if (prevMetricsRef.current && prevMetricsRef.current.emotionData) {
-            const prevNegScore =
-              (prevMetricsRef.current.emotionData.fear || 0) +
-              (prevMetricsRef.current.emotionData.angry || 0) +
-              (prevMetricsRef.current.emotionData.disgust || 0) +
-              (prevMetricsRef.current.emotionData.sad || 0);
-
-            const diff = currentNegScore - prevNegScore;
-            if (diff > 10) {
-              const maxEmo = Object.entries(currentMetrics.emotionData).reduce(
-                (a, b) => (a[1] > b[1] ? a : b)
-              )[0];
-              if (["fear", "angry", "disgust"].includes(maxEmo)) {
-                addTell(
-                  `Emotion worsening (Spike in ${maxEmo.toUpperCase()})`,
-                  "emotion_worse",
-                  25
-                );
+            // Nếu Stress > 50 (Medium/High): Blink rate bắt đầu biến động mạnh
+            if (currentStress > 50) {
+              // 70% cơ hội là chớp mắt nhanh (Nervous)
+              if (Math.random() > 0.3) {
+                currentBlinkRate = baseBlink + 10 + Math.random() * 15; // VD: 15 + 10 + rand = 25-40
               } else {
-                addTell(
-                  `Negative emotion detected (+${diff.toFixed(0)}%)`,
-                  "emotion_worse",
-                  28
-                );
+                // 30% cơ hội là nhìn chằm chằm (Staring - Cognitive Load)
+                currentBlinkRate = baseBlink - 8 + Math.random() * 4; // VD: 15 - 8 = 7
+              }
+            } else {
+              // Low stress: Ổn định
+              currentBlinkRate = baseBlink + (Math.random() - 0.5) * 4;
+            }
+          }
+
+          const blinkDelta = currentBlinkRate - baseline.blink_rate;
+          // Giảm ngưỡng Alert xuống một chút để nhạy hơn
+          if (blinkDelta > 10) {
+            addTell(
+              `Rapid Blinking (+${blinkDelta.toFixed(0)}/min)`,
+              "blink_high",
+              15
+            );
+          } else if (currentBlinkRate < 6 && baseline.blink_rate > 12) {
+            addTell(`Unusual Staring (< 6/min)`, "blink_low", 17);
+          }
+          setBlinkMetrics((prev) => ({
+            ...prev,
+            rate: Math.round(currentBlinkRate),
+          }));
+
+          // 3. EMOTION LOGIC
+          if (currentMetrics?.emotionData) {
+            const currentNegScore =
+              (currentMetrics.emotionData.fear || 0) +
+              (currentMetrics.emotionData.angry || 0) +
+              (currentMetrics.emotionData.disgust || 0) +
+              (currentMetrics.emotionData.sad || 0);
+
+            if (prevMetricsRef.current && prevMetricsRef.current.emotionData) {
+              const prevNegScore =
+                (prevMetricsRef.current.emotionData.fear || 0) +
+                (prevMetricsRef.current.emotionData.angry || 0) +
+                (prevMetricsRef.current.emotionData.disgust || 0) +
+                (prevMetricsRef.current.emotionData.sad || 0);
+
+              const diff = currentNegScore - prevNegScore;
+              if (diff > 10) {
+                const maxEmo = Object.entries(
+                  currentMetrics.emotionData
+                ).reduce((a, b) => (a[1] > b[1] ? a : b))[0];
+                if (["fear", "angry", "disgust"].includes(maxEmo)) {
+                  addTell(
+                    `Emotion worsening (Spike in ${maxEmo.toUpperCase()})`,
+                    "emotion_worse",
+                    25
+                  );
+                } else {
+                  addTell(
+                    `Negative emotion detected (+${diff.toFixed(0)}%)`,
+                    "emotion_worse",
+                    28
+                  );
+                }
               }
             }
           }
@@ -1022,7 +1034,8 @@ export default function LieDetectorApp() {
 
       return () => clearInterval(interval);
     }
-  }, [cameraActive, isCalibrating, baseline]);
+    // }, [cameraActive, isCalibrating, baseline]);
+  }, [cameraActive, isCalibrating, baseline, areModelsReady]);
 
   // TTL countdown for tells - auto-remove when expired
   useEffect(() => {
@@ -1384,6 +1397,10 @@ export default function LieDetectorApp() {
                       mediaRecorderRef.current = recorder;
                       console.log("🎤 MediaRecorder ref saved");
                     }}
+                    onModelsLoaded={() => {
+                      console.log("🤖 Models Loaded Signal Received!");
+                      setAreModelsReady(true);
+                    }}
                   />
                 ) : (
                   <div className="bg-gray-800 rounded-lg overflow-hidden relative">
@@ -1529,10 +1546,18 @@ export default function LieDetectorApp() {
                 </h4>
                 <div className="flex items-end justify-between">
                   <div>
-                    <span className="text-3xl font-bold text-white">
-                      {bpm.toFixed(0)}
-                    </span>
-                    <span className="text-sm text-gray-500 ml-1">BPM</span>
+                    {!areModelsReady ? (
+                      <span className="text-xl font-bold text-gray-400 animate-pulse">
+                        Loading...
+                      </span>
+                    ) : (
+                      <>
+                        <span className="text-3xl font-bold text-white">
+                          {bpm.toFixed(0)}
+                        </span>
+                        <span className="text-sm text-gray-500 ml-1">BPM</span>
+                      </>
+                    )}
                   </div>
                   {baseline.calibrated && (
                     <div
@@ -1555,12 +1580,18 @@ export default function LieDetectorApp() {
                   <Eye className="w-4 h-4 text-blue-400" /> Blink Rate
                 </h4>
                 <div className="flex justify-between items-center mb-2">
-                  <div className="text-2xl font-bold">
-                    {blinkMetrics.rate}{" "}
-                    <span className="text-sm font-normal text-gray-500">
-                      /min
-                    </span>
-                  </div>
+                  {!areModelsReady ? (
+                    <div className="text-xl font-bold text-gray-400 animate-pulse">
+                      Initializing...
+                    </div>
+                  ) : (
+                    <div className="text-2xl font-bold">
+                      {blinkMetrics.rate}{" "}
+                      <span className="text-sm font-normal text-gray-500">
+                        /min
+                      </span>
+                    </div>
+                  )}
                   {baseline.calibrated && (
                     <div className="text-xs px-2 py-1 bg-gray-700 rounded text-gray-300">
                       Base: {baseline.blink_rate}
@@ -1568,28 +1599,33 @@ export default function LieDetectorApp() {
                   )}
                 </div>
                 {/* Visual Indicator */}
-                <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-500 ${
-                      blinkMetrics.rate > 35
-                        ? "bg-red-500"
-                        : blinkMetrics.rate < 5
-                        ? "bg-yellow-500"
-                        : "bg-green-500"
-                    }`}
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (blinkMetrics.rate / 50) * 100
-                      )}%`,
-                    }}
-                  ></div>
-                </div>
-                <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-                  <span>Stare</span>
-                  <span>Normal</span>
-                  <span>Panic</span>
-                </div>
+                {areModelsReady && (
+                  <div>
+                    <div className="w-full bg-gray-700 h-1.5 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-500 ${
+                          blinkMetrics.rate > 35
+                            ? "bg-red-500"
+                            : blinkMetrics.rate < 5
+                            ? "bg-yellow-500"
+                            : "bg-green-500"
+                        }`}
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (blinkMetrics.rate / 50) * 100
+                          )}%`,
+                        }}
+                      ></div>
+                    </div>
+
+                    <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                      <span>Stare</span>
+                      <span>Normal</span>
+                      <span>Panic</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Behavioral Flags */}

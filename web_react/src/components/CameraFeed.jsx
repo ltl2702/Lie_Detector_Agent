@@ -34,6 +34,7 @@ export default function CameraFeed({
   onMetricsUpdate,
   onVideoRecorded,
   onRecorderReady,
+  onModelsLoaded,
 }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -400,6 +401,10 @@ export default function CameraFeed({
 
         console.log("✅ All MediaPipe models ready!");
         setModelsLoading(false);
+
+        if (onModelsLoaded) {
+          onModelsLoaded(true);
+        }
 
         return true;
       } catch (err) {
