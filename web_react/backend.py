@@ -19,7 +19,8 @@ from pathlib import Path
 
 # Add src directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
+import subprocess
+import shutil
 import cv2
 import mediapipe as mp
 import deception_detection as dd
@@ -258,16 +259,30 @@ class DetectionSession:
         if self.cap:
             frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = int(self.cap.get(cv2.CAP_PROP_FPS)) or 30
+            # Ép cứng 30 FPS để đồng bộ với logic xử lý
+            fps = 30 
             
-            # Create VideoWriter
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            # --- SỬA ĐỔI QUAN TRỌNG: Dùng codec H.264 (avc1) ---
+            # Codec này tương thích tốt nhất với Chrome/Web
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
+            
             self.video_writer = cv2.VideoWriter(
                 str(self.video_filename),
                 fourcc,
                 fps,
                 (frame_width, frame_height)
             )
+            
+            # Fallback: Nếu máy không có avc1 thì quay về mp4v
+            if not self.video_writer.isOpened():
+                print("⚠️ 'avc1' codec not found, falling back to 'mp4v'")
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                self.video_writer = cv2.VideoWriter(
+                    str(self.video_filename),
+                    fourcc,
+                    fps,
+                    (frame_width, frame_height)
+                )
             
             if self.video_writer.isOpened():
                 self.recording = True
@@ -277,6 +292,73 @@ class DetectionSession:
                 print(f"❌ Failed to start recording")
                 return False
         return False
+
+    def stop_camera_capture(self):
+        """Stop camera capture thread and fix video metadata"""
+        self.camera_running = False
+        self.recording = False
+        
+        if self.camera_thread:
+            self.camera_thread.join(timeout=2)
+            
+        if self.video_writer:
+            self.video_writer.release()
+            self.video_writer = None
+            
+        if self.cap:
+            self.cap.release()
+            
+        # --- SỬA ĐỔI QUAN TRỌNG: Tự động chạy FFmpeg để sửa file ---
+        if self.video_filename and os.path.exists(self.video_filename):
+            self._fix_video_metadata(self.video_filename)
+
+    def _fix_video_metadata(self, input_path):
+        """Use FFmpeg to remux video and fix missing duration/metadata"""
+        try:
+            print(f"🔧 Fixing metadata for: {input_path}")
+            
+            # Tạo tên file tạm
+            temp_path = str(input_path).replace(".mp4", "_temp.mp4")
+            input_str = str(input_path)
+            
+            # Đổi tên file gốc thành file tạm
+            os.rename(input_str, temp_path)
+            
+            # Chạy lệnh FFmpeg: ffmpeg -i temp.mp4 -c copy final.mp4
+            # Lệnh này chạy cực nhanh và sẽ điền lại Duration bị thiếu
+            command = [
+                'ffmpeg', 
+                '-y',               # Overwrite output without asking
+                '-i', temp_path,    # Input
+                '-c', 'copy',       # Copy stream (no re-encode)
+                input_str           # Output (tên file gốc)
+            ]
+            
+            # Chạy lệnh ngầm (không hiện cửa sổ đen)
+            result = subprocess.run(
+                command, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE
+            )
+            
+            if result.returncode == 0:
+                print(f"✅ Video fixed successfully!")
+                # Xóa file tạm
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            else:
+                print(f"⚠️ FFmpeg failed to fix video. Keeping original.")
+                print(result.stderr.decode())
+                # Hồi phục file gốc nếu lỗi
+                if os.path.exists(temp_path):
+                    os.rename(temp_path, input_str)
+                    
+        except Exception as e:
+            print(f"⚠️ Could not run FFmpeg auto-fix: {e}")
+            # Đảm bảo file gốc vẫn còn đó nếu code lỗi
+            temp_path = str(input_path).replace(".mp4", "_temp.mp4")
+            if os.path.exists(temp_path) and not os.path.exists(input_path):
+                os.rename(temp_path, input_path)
         
     def to_dict(self):
         return {
@@ -1146,6 +1228,17 @@ def serve_video(video_path):
         # Get file size
         file_size = os.path.getsize(video_file)
         
+        # --- Tự động nhận diện đuôi file để set MIME Type chuẩn ---
+        filename_str = str(video_file).lower()
+        if filename_str.endswith('.mp4'):
+            mime_type = 'video/mp4'          # Chuẩn cho Chrome/Edge
+        elif filename_str.endswith('.webm'):
+            mime_type = 'video/webm'         # Chuẩn cho Firefox/Chrome
+        elif filename_str.endswith('.avi'):
+            mime_type = 'video/x-msvideo'    # Ít hỗ trợ trên web
+        else:
+            mime_type = 'application/octet-stream'
+        
         # Check for range header (for video seeking)
         range_header = request.headers.get('Range', None)
         
@@ -1176,7 +1269,7 @@ def serve_video(video_path):
             response = Response(
                 stream_with_context(generate()),
                 status=206,
-                mimetype='video/x-msvideo',
+                mimetype=mime_type,  # <--- ĐÃ SỬA: Dùng biến mime_type thay vì ép cứng AVI
                 direct_passthrough=True
             )
             response.headers.add('Content-Range', f'bytes {byte_start}-{byte_end}/{file_size}')
@@ -1187,7 +1280,7 @@ def serve_video(video_path):
             # Serve entire file
             return send_file(
                 str(video_file),
-                mimetype='video/x-msvideo',
+                mimetype=mime_type,  # <--- ĐÃ SỬA: Dùng biến mime_type thay vì ép cứng AVI
                 as_attachment=False,
                 conditional=True
             )
@@ -1199,7 +1292,6 @@ def serve_video(video_path):
             'status': 'error',
             'message': str(e)
         }), 500
-
 if __name__ == '__main__':
     print("🚀 Starting Lie Detector Backend API")
     print("📡 Server running on http://localhost:5000")
