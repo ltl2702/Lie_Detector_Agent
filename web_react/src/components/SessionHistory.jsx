@@ -64,8 +64,8 @@ export default function SessionHistory({ onSelectSession }) {
                     <h3 className="text-lg font-semibold text-white group-hover:text-blue-400 transition">
                       {session.session_name}
                     </h3>
-                    <span className="text-xs px-2 py-1 bg-blue-900 text-blue-400 rounded">
-                      {session.events?.length || 0} events
+                    <span className="text-xs px-2 py-1 bg-red-900 text-red-400 rounded">
+                      {session.tells?.length || 0} tells
                     </span>
                   </div>
 
@@ -89,8 +89,35 @@ export default function SessionHistory({ onSelectSession }) {
                   </div>
 
                   {session.video_file && (
-                    <div className="mt-2 text-xs text-gray-500 truncate">
-                      📹 {session.video_file}
+                    <div className="mt-3">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block px-2 py-1 bg-purple-900 text-purple-300 text-xs rounded whitespace-nowrap">
+                          🎥 Video Available
+                        </span>
+                        <button
+                          className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded transition"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const video = document.getElementById(`session-video-${idx}`);
+                            if (video) {
+                              video.style.display = video.style.display === 'none' ? 'block' : 'none';
+                            }
+                          }}
+                        >
+                          Xem video
+                        </button>
+                        <span className="text-xs text-gray-600 truncate">
+                          {session.video_file}
+                        </span>
+                      </div>
+                      <video
+                        id={`session-video-${idx}`}
+                        style={{ display: 'none', maxWidth: '320px', marginTop: '8px', borderRadius: '8px' }}
+                        controls
+                        src={`http://localhost:5000/recordings/${session.video_file}`}
+                      >
+                        Your browser does not support video playback.
+                      </video>
                     </div>
                   )}
                 </div>

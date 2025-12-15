@@ -4,7 +4,11 @@ src/__pycache__/
 *.log
 docs
 *.avi
-*.json
+sessions/
+memory/
 src/venv/
-recordings
+*.mp4
+recordings/
+.env
+web_react/.env
 .vite

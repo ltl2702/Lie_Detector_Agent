@@ -5,7 +5,7 @@ const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:5000';
 
 const api = axios.create({
   baseURL: API_URL,
-  timeout: 10000,
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },

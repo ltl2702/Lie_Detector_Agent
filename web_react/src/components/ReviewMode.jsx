@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Play, Pause, RotateCcw, SkipBack, SkipForward, Clock, Calendar, TrendingUp } from 'lucide-react';
 
 export default function ReviewMode({ sessionData, onClose }) {
@@ -10,13 +10,38 @@ export default function ReviewMode({ sessionData, onClose }) {
   const [videoError, setVideoError] = useState(null);
   const [videoLoaded, setVideoLoaded] = useState(false);
   const videoRef = React.useRef(null);
+  const hasAutoPlayedRef = React.useRef(false);  // Flag to prevent multiple auto-plays
 
-  // Use video duration if available, otherwise fall back to events duration
-  const duration = videoDuration > 0 
+  // Convert tells to events format if events array is empty
+  const events = useMemo(() => {
+    if (sessionData?.events && sessionData.events.length > 0) {
+      return sessionData.events;
+    }
+    
+    // Convert tells to events format
+    if (sessionData?.tells && sessionData.tells.length > 0) {
+      return sessionData.tells.map(tell => ({
+        timestamp: tell.timestamp || 0,
+        tell_type: tell.type || 'detection',
+        tell_text: tell.message || '',
+        stress_level: ['lips', 'blink', 'bpm'].includes(tell.type) ? 2 : 1,
+        confidence: 0.8
+      }));
+    }
+    
+    return [];
+  }, [sessionData]);
+
+  // Calibration typically takes 30 seconds before analysis starts
+  const CALIBRATION_DURATION = 30;
+  
+  // Use video duration only (analysis phase only, not including calibration)
+  // Don't use session duration as it includes calibration time
+  const duration = (videoDuration > 0 && isFinite(videoDuration))
     ? videoDuration 
-    : (sessionData?.events?.length > 0 
-      ? sessionData.events[sessionData.events.length - 1].timestamp 
-      : 0);
+    : (events.length > 0 
+      ? Math.max(...events.map(e => e.timestamp - (sessionData?.start_time || 0))) - CALIBRATION_DURATION
+      : 22); // Default fallback for webm videos without duration
 
   useEffect(() => {
     if (videoRef.current) {
@@ -24,14 +49,54 @@ export default function ReviewMode({ sessionData, onClose }) {
     }
   }, [playbackSpeed]);
 
+  // Force video to load metadata on mount
   useEffect(() => {
-    if (playing && videoRef.current && videoLoaded) {
-      videoRef.current.play().catch(err => {
-        console.error('Error playing video:', err);
-        setPlaying(false);
+    if (videoRef.current && sessionData?.video_file) {
+      console.log('🎬 Loading video:', sessionData.video_file);
+      videoRef.current.load();
+    }
+  }, [sessionData?.video_file]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (playing && videoLoaded) {
+      console.log('▶️ Attempting to play video', {
+        readyState: video.readyState,
+        paused: video.paused,
+        currentTime: video.currentTime
       });
-    } else if (videoRef.current) {
-      videoRef.current.pause();
+      
+      // Check if video is ready to play (readyState >= 2 means enough data loaded)
+      if (video.readyState >= 2) {
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log('✅ Video playing successfully');
+            })
+            .catch(err => {
+              console.error('❌ Error playing video:', err);
+              setPlaying(false);
+            });
+        }
+      } else {
+        console.warn('⚠️ Video not ready to play yet, readyState:', video.readyState);
+        // Wait for video to be ready
+        const onCanPlay = () => {
+          console.log('✅ Video can now play');
+          video.play().catch(err => {
+            console.error('❌ Error playing video after canplay:', err);
+            setPlaying(false);
+          });
+          video.removeEventListener('canplay', onCanPlay);
+        };
+        video.addEventListener('canplay', onCanPlay);
+      }
+    } else if (!playing) {
+      console.log('⏸️ Pausing video');
+      video.pause();
     }
   }, [playing, videoLoaded]);
 
@@ -43,9 +108,26 @@ export default function ReviewMode({ sessionData, onClose }) {
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      setVideoDuration(videoRef.current.duration);
+      const duration = videoRef.current.duration;
+      console.log('📹 Video metadata loaded:', {
+        duration,
+        readyState: videoRef.current.readyState,
+        networkState: videoRef.current.networkState,
+        videoWidth: videoRef.current.videoWidth,
+        videoHeight: videoRef.current.videoHeight
+      });
+      
+      // Always set videoLoaded to true even if duration is invalid
+      // Video can still play, we'll use session duration as fallback
       setVideoLoaded(true);
-      console.log('Video loaded, duration:', videoRef.current.duration);
+      
+      if (duration && !isNaN(duration) && isFinite(duration)) {
+        setVideoDuration(duration);
+        console.log('✅ Video duration set:', duration);
+      } else {
+        console.warn('⚠️ Invalid duration, using session duration fallback');
+        setVideoDuration(0); // Force fallback to session duration
+      }
     }
   };
 
@@ -80,9 +162,11 @@ export default function ReviewMode({ sessionData, onClose }) {
     handleSeekToTime(newTime);
   };
 
-  const eventsAtCurrentTime = sessionData?.events?.filter(
-    e => Math.abs(e.timestamp - currentTime) < 2
-  ) || [];
+  const eventsAtCurrentTime = events.filter(event => {
+    // Convert absolute timestamp to relative seconds from analysis start (after calibration)
+    const eventTime = event.timestamp - (sessionData?.start_time || 0) - CALIBRATION_DURATION;
+    return eventTime >= 0 && Math.abs(eventTime - currentTime) < 2;
+  });
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-6">
@@ -113,19 +197,30 @@ export default function ReviewMode({ sessionData, onClose }) {
                 <>
                   <video
                     ref={videoRef}
-                    className="max-w-full max-h-full"
+                    className="max-w-full max-h-full object-contain"
+                    style={{ display: 'block', width: 'auto', height: 'auto' }}
                     onTimeUpdate={handleTimeUpdate}
                     onLoadedMetadata={handleLoadedMetadata}
                     onError={handleVideoError}
                     onEnded={() => setPlaying(false)}
+                    onCanPlay={() => {
+                      // Auto-play only once when video first becomes ready
+                      if (videoRef.current && !hasAutoPlayedRef.current) {
+                        console.log('✅ Video can play - auto-starting playback (first time)');
+                        hasAutoPlayedRef.current = true;
+                        setPlaying(true);
+                      }
+                    }}
                     controls={false}
+                    crossOrigin="anonymous"
+                    preload="auto"
+                    playsInline
+                    src={`http://localhost:5000/recordings/${sessionData.video_file}`}
                   >
-                    <source src={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`} type="video/x-msvideo" />
-                    <source src={`http://localhost:5000/api/video/${encodeURIComponent(sessionData.video_file)}`} type="video/mp4" />
                     Your browser does not support video playback.
                   </video>
                   {!videoLoaded && !videoError && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75">
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75 z-10">
                       <div className="text-center">
                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-3"></div>
                         <p className="text-gray-400">Loading video...</p>
@@ -165,7 +260,14 @@ export default function ReviewMode({ sessionData, onClose }) {
                     <SkipBack className="w-5 h-5" />
                   </button>
                   <button
-                    onClick={() => setPlaying(!playing)}
+                    onClick={() => {
+                      console.log('🎮 Play/Pause button clicked', { 
+                        currentPlaying: playing, 
+                        willBe: !playing,
+                        videoLoaded 
+                      });
+                      setPlaying(!playing);
+                    }}
                     className="p-3 bg-blue-600 hover:bg-blue-700 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={!videoLoaded}
                   >
@@ -205,17 +307,23 @@ export default function ReviewMode({ sessionData, onClose }) {
                   onClick={handleSeek}
                 >
                   {/* Event markers */}
-                  {sessionData?.events?.map((event, idx) => (
-                    <div
-                      key={idx}
-                      className={`absolute top-0 bottom-0 w-1 ${
-                        event.stress_level >= 3 ? 'bg-red-500' :
-                        event.stress_level >= 2 ? 'bg-yellow-500' :
-                        'bg-blue-500'
-                      } opacity-50`}
-                      style={{ left: `${(event.timestamp / duration) * 100}%` }}
-                    />
-                  ))}
+                  {events.map((event, idx) => {
+                    // Adjust event time to be relative to analysis start
+                    const eventTime = event.timestamp - (sessionData?.start_time || 0) - CALIBRATION_DURATION;
+                    if (eventTime < 0) return null; // Skip events during calibration
+                    
+                    return (
+                      <div
+                        key={idx}
+                        className={`absolute top-0 bottom-0 w-1 ${
+                          event.stress_level >= 3 ? 'bg-red-500' :
+                          event.stress_level >= 2 ? 'bg-yellow-500' :
+                          'bg-blue-500'
+                        } opacity-50`}
+                        style={{ left: `${(eventTime / duration) * 100}%` }}
+                      />
+                    );
+                  })}
 
                   {/* Progress */}
                   <div
@@ -283,18 +391,111 @@ export default function ReviewMode({ sessionData, onClose }) {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-400">Total Events:</span>
-                  <span className="text-white font-semibold">{sessionData?.events?.length || 0}</span>
+                  <span className="text-white font-semibold">{events.length}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-400">Duration:</span>
+                  <span className="text-gray-400">Analysis Duration:</span>
                   <span className="text-white font-semibold">{formatTime(duration)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">FPS:</span>
-                  <span className="text-white font-semibold">{sessionData?.fps || 0}</span>
+                  <span className="text-white font-semibold">{sessionData?.fps || 30}</span>
                 </div>
               </div>
             </div>
+
+            {/* AI Analysis */}
+            {sessionData?.ai_analysis && (
+              <div className="mt-6 pt-4 border-t border-gray-700">
+                <h3 className="text-sm font-semibold mb-3 text-gray-400 flex items-center gap-2">
+                  🤖 AI Analysis
+                </h3>
+                
+                {/* Suspicion Level */}
+                <div className="mb-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-400">Mức độ khả nghi:</span>
+                    <span className={`text-xs font-bold px-2 py-1 rounded ${
+                      sessionData.ai_analysis.suspicion_level === 'HIGH' ? 'bg-red-900 text-red-400' :
+                      sessionData.ai_analysis.suspicion_level === 'MEDIUM' ? 'bg-yellow-900 text-yellow-400' :
+                      'bg-green-900 text-green-400'
+                    }`}>
+                      {sessionData.ai_analysis.suspicion_level}
+                      {sessionData.ai_analysis.suspicion_score && ` (${sessionData.ai_analysis.suspicion_score}%)`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Summary */}
+                <div className="mb-3 p-2 bg-gray-700 rounded text-xs text-gray-300">
+                  <strong className="text-white">Tóm tắt:</strong><br/>
+                  {sessionData.ai_analysis.summary}
+                </div>
+
+                {/* Recommendation */}
+                <div className="mb-3 p-2 bg-blue-900 bg-opacity-20 border border-blue-700 rounded text-xs">
+                  <strong className="text-blue-400">Khuyến nghị:</strong><br/>
+                  <span className="text-gray-300">{sessionData.ai_analysis.recommendation}</span>
+                </div>
+
+                {/* Reasoning */}
+                <div className="mb-3 p-2 bg-gray-700 rounded text-xs text-gray-300">
+                  <strong className="text-white">Lý do:</strong><br/>
+                  {sessionData.ai_analysis.reasoning}
+                </div>
+
+                {/* Key Indicators */}
+                {sessionData.ai_analysis.key_indicators && sessionData.ai_analysis.key_indicators.length > 0 && (
+                  <div className="mb-3">
+                    <strong className="text-xs text-white">Dấu hiệu quan trọng:</strong>
+                    <ul className="mt-1 space-y-2 text-xs text-gray-300">
+                      {sessionData.ai_analysis.key_indicators.map((indicator, idx) => {
+                        // Handle both string and object formats
+                        if (typeof indicator === 'string') {
+                          return (
+                            <li key={idx} className="flex items-start gap-1">
+                              <span className="text-blue-400">•</span>
+                              <span>{indicator}</span>
+                            </li>
+                          );
+                        } else if (typeof indicator === 'object') {
+                          return (
+                            <li key={idx} className="flex flex-col gap-1">
+                              <div className="flex items-start gap-1">
+                                <span className="text-blue-400">•</span>
+                                <span className="font-semibold text-white">{indicator.indicator || 'Dấu hiệu'}</span>
+                              </div>
+                              {indicator.interpretation && (
+                                <span className="ml-3 text-gray-400">{indicator.interpretation}</span>
+                              )}
+                              {indicator.anomaly_note && (
+                                <span className="ml-3 text-yellow-400">⚠️ {indicator.anomaly_note}</span>
+                              )}
+                            </li>
+                          );
+                        }
+                        return null;
+                      })}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Suggested Questions */}
+                {sessionData.ai_analysis.suggested_questions && sessionData.ai_analysis.suggested_questions.length > 0 && (
+                  <div>
+                    <strong className="text-xs text-white">Câu hỏi nên hỏi thêm:</strong>
+                    <ul className="mt-1 space-y-1 text-xs text-gray-300">
+                      {sessionData.ai_analysis.suggested_questions.map((question, idx) => (
+                        <li key={idx} className="flex items-start gap-1">
+                          <span className="text-yellow-400">?</span>
+                          <span>{question}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

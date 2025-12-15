@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Activity, Eye, Hand, Heart, AlertTriangle, TrendingUp, Target, History, Video, Square } from 'lucide-react';
 import { io } from 'socket.io-client';
+import axios from 'axios';
 import api from './services/api';
 import CameraFeed from './components/CameraFeed';
 import TruthMeter from './components/TruthMeter';
 import AlertSystem from './components/AlertSystem';
 import ReviewMode from './components/ReviewMode';
 import SessionHistory from './components/SessionHistory';
+import AIAnalysisModal from './components/AIAnalysisModal';
 
 export default function LieDetectorApp() {
   const [viewMode, setViewMode] = useState('live'); // 'live', 'history', 'review'
@@ -61,33 +63,124 @@ export default function LieDetectorApp() {
   // Refs
   const wsRef = useRef(null);
   const pollingRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const videoBlobRef = useRef(null);
+  
+  // Video recording
+  const [sessionVideoBlob, setSessionVideoBlob] = useState(null);
+  
+  // AI Analysis
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [showAiAnalysis, setShowAiAnalysis] = useState(false);
+  const [isAnalyzingSession, setIsAnalyzingSession] = useState(false);
   
   // Handle ending session
   const handleEndSession = async () => {
     if (!sessionId) return;
     
+    const confirmEnd = window.confirm('Are you sure you want to end this session? The video will be saved.');
+    if (!confirmEnd) return;
+    
+    // Immediately hide all UI components
+    const currentSessionId = sessionId;
+    setSessionId(null);
+    setCameraActive(false);
+    
     try {
+      let uploadedVideoFile = null;
+      let videoBlobToUpload = null;
+      
+      // Stop MediaRecorder directly and wait for blob
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        console.log('⏹️ Stopping MediaRecorder...');
+        
+        // Create promise to wait for onstop event
+        const stopPromise = new Promise((resolve) => {
+          const originalOnStop = mediaRecorderRef.current.onstop;
+          mediaRecorderRef.current.onstop = (event) => {
+            if (originalOnStop) originalOnStop(event);
+            // Wait for blob to be saved to ref
+            setTimeout(() => resolve(), 200);
+          };
+        });
+        
+        mediaRecorderRef.current.stop();
+        await stopPromise;
+        
+        // Get blob from ref
+        videoBlobToUpload = videoBlobRef.current;
+        console.log('📹 Video blob from ref, size:', videoBlobToUpload?.size || 0);
+      }
+      
+      // Stop calibration
+      setBaseline(prev => ({ ...prev, calibrated: false }));
+      
+      // Upload video if available
+      if (videoBlobToUpload && videoBlobToUpload.size > 0) {
+        console.log('📤 Uploading video, size:', videoBlobToUpload.size);
+        const formData = new FormData();
+        formData.append('video', videoBlobToUpload, 'session_video.webm');
+        formData.append('session_id', currentSessionId);
+        
+        try {
+          const uploadRes = await axios.post('http://localhost:5000/api/upload_video', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+          
+          if (uploadRes.data && uploadRes.data.video_file) {
+            uploadedVideoFile = uploadRes.data.video_file;
+            console.log('✅ Video uploaded:', uploadedVideoFile);
+          }
+        } catch (uploadErr) {
+          console.error('Failed to upload video:', uploadErr);
+        }
+      } else {
+        console.warn('⚠️ No video blob available to upload');
+      }
+      
       // Save session data
       const sessionData = {
-        session_id: sessionId,
+        session_id: currentSessionId,
         session_name: `Session_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)}`,
         start_time: Date.now() / 1000,
         end_time: Date.now() / 1000,
         baseline: baseline,
-        tells: tells,
+        tells: tells.map(t => ({
+          message: t.message,
+          type: t.type,
+          timestamp: Date.now() / 1000
+        })),
         metrics: {
           bpm: bpm,
           emotion: dominantEmotion,
-          stress_level: stressLevel
-        }
+          stress_level: stressLevel,
+          gesture_score: gestureScore
+        },
+        video_file: uploadedVideoFile
       };
       
-      // Call backend to end session
-      await api.endSession(sessionId, sessionData);
+      // Call backend to end session and save video
+      setIsAnalyzingSession(true);
+      const response = await api.endSession(currentSessionId, sessionData);
+      setIsAnalyzingSession(false);
       
-      // Reset state
-      setCameraActive(false);
-      setSessionId(null);
+      // Show AI analysis if available
+      if (response.data?.ai_analysis) {
+        console.log('🤖 Received AI analysis:', response.data.ai_analysis);
+        setAiAnalysis(response.data.ai_analysis);
+        setShowAiAnalysis(true);
+      }
+      
+      // Disconnect websocket
+      if (wsRef.current) {
+        wsRef.current.disconnect();
+      }
+      
+      // Reset remaining state (sessionId and cameraActive already set at start)
+      setIsCalibrating(false);
+      setCalibrationProgress(0);
+      setAnalyzing(false);
+      setLipCompression(false);
       setBaseline({
         bpm: 0,
         blink_rate: 0,
@@ -97,13 +190,17 @@ export default function LieDetectorApp() {
         calibrated: false
       });
       setTells([]);
+      setAlerts([]);
+      setShowAlert(false);
+      setTruthMeterPosition(30);
+      setBpm(0);
+      setStressLevel('LOW STRESS');
+      setStressColor('text-green-400');
+      setSessionVideoBlob(null);
+      videoBlobRef.current = null;
       
-      // Disconnect websocket
-      if (wsRef.current) {
-        wsRef.current.disconnect();
-      }
-      
-      alert('Session ended and saved successfully!');
+      const videoFile = response.data.video_file || uploadedVideoFile;
+      alert(`Session ended successfully!\n${videoFile ? `Video saved: ${videoFile}` : 'Session saved.'}`);
     } catch (error) {
       console.error('Error ending session:', error);
       alert('Failed to end session');
@@ -393,6 +490,24 @@ export default function LieDetectorApp() {
     }
   }, [cameraActive, isCalibrating, baseline]);
 
+  // TTL countdown for tells - auto-remove when expired
+  useEffect(() => {
+    if (tells.length === 0 || !cameraActive) return;
+    
+    const interval = setInterval(() => {
+      setTells(prev => {
+        const updated = prev.map(tell => ({
+          ...tell,
+          ttl: tell.ttl - 1
+        })).filter(tell => tell.ttl > 0);
+        
+        return updated;
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [tells.length, cameraActive]);
+
   const addTell = (message, type) => {
     const newTell = {
       id: Date.now() + Math.random(),
@@ -402,11 +517,22 @@ export default function LieDetectorApp() {
       ttl: 10 // 10 seconds
     };
     
+    // UI: Keep only latest tell of each type for clean display
     setTells(prev => {
-      // Remove existing tell of same type
       const filtered = prev.filter(t => t.type !== type);
       return [...filtered, newTell];
     });
+    
+    // Backend: Send EVERY tell occurrence (including duplicates) for accurate counting
+    if (wsRef.current && wsRef.current.connected && sessionId) {
+      wsRef.current.emit('frontend_tell', {
+        session_id: sessionId,
+        type: type,
+        message: message,
+        timestamp: newTell.timestamp
+      });
+      console.log('📤 Tell sent to backend:', type, message);
+    }
     
     // Update truth meter based on tells count
     updateTruthMeter(tells.length + 1);
@@ -613,7 +739,20 @@ export default function LieDetectorApp() {
             {/* Video Feed with Calibration Overlay */}
             <div className="relative">
               {cameraActive && sessionId ? (
-                <CameraFeed sessionId={sessionId} calibrated={baseline.calibrated} onMetricsUpdate={handleFrontendMetrics} />
+                <CameraFeed 
+                  sessionId={sessionId} 
+                  calibrated={baseline.calibrated} 
+                  onMetricsUpdate={handleFrontendMetrics}
+                  onVideoRecorded={(blob) => {
+                    console.log('📹 Video received from CameraFeed, size:', blob.size);
+                    videoBlobRef.current = blob;
+                    setSessionVideoBlob(blob);
+                  }}
+                  onRecorderReady={(recorder) => {
+                    mediaRecorderRef.current = recorder;
+                    console.log('🎤 MediaRecorder ref saved');
+                  }}
+                />
               ) : (
                 <div className="bg-gray-800 rounded-lg overflow-hidden relative">
                   <div className="aspect-video bg-gray-700 flex items-center justify-center relative">
@@ -648,7 +787,8 @@ export default function LieDetectorApp() {
               )}
             </div>
 
-            {cameraActive && !isCalibrating && !baseline.calibrated && (
+            {/* Calibration waiting visualization - only show during active session waiting for calibration */}
+            {cameraActive && sessionId && !isCalibrating && !baseline.calibrated && (
               <div className="bg-gray-800 rounded-lg overflow-hidden relative">
                 <div className="aspect-video bg-gray-700 flex items-center justify-center relative">
                   <div className="relative">
@@ -658,13 +798,6 @@ export default function LieDetectorApp() {
                       <div className="absolute top-20 right-16 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
                       <div className="absolute top-32 left-1/2 -translate-x-1/2 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
                       <div className="absolute bottom-24 left-1/2 -translate-x-1/2 w-12 h-6 border-2 border-yellow-400 rounded-full"></div>
-                      
-                      {lipCompression && (
-                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-yellow-500 px-4 py-2 rounded flex items-center gap-2">
-                          <AlertTriangle className="w-4 h-4" />
-                          <span className="text-sm font-semibold">Lip Compression</span>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -724,8 +857,8 @@ export default function LieDetectorApp() {
                 )}
               </div>
               
-              {/* Detection Tells */}
-              {tells.map(tell => (
+              {/* Detection Tells - only show during active session */}
+              {cameraActive && baseline.calibrated && tells.map(tell => (
                 <div key={tell.id} className="bg-yellow-900 bg-opacity-50 border-2 border-yellow-600 rounded-lg p-3 flex items-center justify-between animate-pulse">
                   <span className="text-base font-semibold text-yellow-200">{tell.message}</span>
                   <span className="text-sm text-yellow-400 font-bold">{tell.ttl}s</span>
@@ -796,6 +929,40 @@ export default function LieDetectorApp() {
         </div>
         )}
       </div>
+      
+      {/* AI Analysis Modal - Shows on top of everything */}
+      {showAiAnalysis && aiAnalysis && (
+        <AIAnalysisModal 
+          analysis={aiAnalysis} 
+          onClose={() => {
+            setShowAiAnalysis(false);
+            setAiAnalysis(null);
+          }} 
+        />
+      )}
+      
+      {/* AI Analysis Loading Overlay */}
+      {isAnalyzingSession && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-gray-800 rounded-2xl p-8 shadow-2xl border border-purple-500/30 max-w-md animate-pulse">
+            <div className="flex flex-col items-center space-y-4">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <svg className="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                </div>
+              </div>
+              <div className="text-center">
+                <h3 className="text-xl font-bold text-white mb-2">AI Đang Phân Tích...</h3>
+                <p className="text-gray-400 text-sm">Vui lòng đợi trong giây lát</p>
+                <p className="text-purple-400 text-xs mt-2">AI đang xử lý dữ liệu phiên làm việc</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
