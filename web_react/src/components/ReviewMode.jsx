@@ -414,7 +414,7 @@ export default function ReviewMode({ sessionData, onClose }) {
                         {event.tell_type}
                       </span>
                       <span className="text-xs text-gray-400">
-                        {formatTime(event.timestamp)}
+                        {formatTime(event.timestamp - (sessionData?.start_time || 0) - CALIBRATION_DURATION)}
                       </span>
                     </div>
                     <p className="text-sm text-white">{event.tell_text}</p>
