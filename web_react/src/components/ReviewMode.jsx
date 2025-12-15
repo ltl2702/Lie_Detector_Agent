@@ -418,12 +418,8 @@ export default function ReviewMode({ sessionData, onClose }) {
                       </span>
                     </div>
                     <p className="text-sm text-white">{event.tell_text}</p>
-                    <div className="flex items-center justify-between mt-2 text-xs">
-                      <span className="text-gray-400">Confidence:</span>
-                      <span className="text-white">
-                        {(event.confidence * 100).toFixed(0)}%
-                      </span>
-                    </div>
+                  
+                
                   </div>
                 ))}
               </div>
