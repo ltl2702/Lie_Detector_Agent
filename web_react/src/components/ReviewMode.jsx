@@ -215,7 +215,7 @@ export default function ReviewMode({ sessionData, onClose }) {
                   <video
                     ref={videoRef}
                     className="max-w-full max-h-full object-contain"
-                    style={{ display: "block", width: "auto", height: "auto" }}
+                    style={{ display: "block", width: "auto", height: "auto", transform: "scaleX(-1)" }}
                     onTimeUpdate={handleTimeUpdate}
                     onLoadedMetadata={handleLoadedMetadata}
                     onError={handleVideoError}
