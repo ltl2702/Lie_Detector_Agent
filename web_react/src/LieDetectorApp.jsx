@@ -610,9 +610,10 @@ export default function LieDetectorApp() {
     setGazeDetected(metrics.gazeShiftIntensity > 0.15); // Cập nhật cho UI
 
     const isCalibrated = baselineRef.current.calibrated;
-    if (!isCalibrated || isCalibrating) {
-      return;
-    }
+
+    // if (!isCalibrated || isCalibrating) {
+    //   return;
+    // }
 
     // 3. Logic phát hiện nói dối (Chỉ chạy khi đã Calibrate)
     // if (baseline.calibrated && metrics.blinkRate !== undefined) {
