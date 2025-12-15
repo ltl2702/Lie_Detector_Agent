@@ -44,8 +44,8 @@ export default function ReviewMode({ sessionData, onClose }) {
   // Calibration typically takes 30 seconds before analysis starts
   const CALIBRATION_DURATION = 30;
 
-  // Use video duration only (analysis phase only, not including calibration)
-  // Don't use session duration as it includes calibration time
+  // CHUẨN HÓA: duration là thời gian chuẩn, dùng cho mọi hàm/time liên quan
+  // Ưu tiên videoDuration, fallback như cũ nếu không có
   const duration =
     videoDuration > 0 && isFinite(videoDuration)
       ? videoDuration
@@ -53,7 +53,10 @@ export default function ReviewMode({ sessionData, onClose }) {
       ? Math.max(
           ...events.map((e) => e.timestamp - (sessionData?.start_time || 0))
         ) - CALIBRATION_DURATION
-      : 22; // Default fallback for webm videos without duration
+      : 22;
+
+  // Hàm lấy thời gian chuẩn cho các logic khác
+  const getAnalysisDuration = () => duration;
 
   useEffect(() => {
     if (videoRef.current) {
@@ -181,7 +184,8 @@ export default function ReviewMode({ sessionData, onClose }) {
     // Convert absolute timestamp to relative seconds from analysis start (after calibration)
     const eventTime =
       event.timestamp - (sessionData?.start_time || 0) - CALIBRATION_DURATION;
-    return eventTime >= 0 && Math.abs(eventTime - currentTime) < 2;
+    // Dùng duration chuẩn cho mọi so sánh
+    return eventTime >= 0 && eventTime <= getAnalysisDuration() && Math.abs(eventTime - currentTime) < 2;
   });
 
   return (
@@ -358,7 +362,7 @@ export default function ReviewMode({ sessionData, onClose }) {
                             ? "bg-yellow-500"
                             : "bg-blue-500"
                         } opacity-50`}
-                        style={{ left: `${(eventTime / duration) * 100}%` }}
+                        style={{ left: `${(eventTime / getAnalysisDuration()) * 100}%` }}
                       />
                     );
                   })}
@@ -366,19 +370,19 @@ export default function ReviewMode({ sessionData, onClose }) {
                   {/* Progress */}
                   <div
                     className="absolute top-0 bottom-0 bg-blue-500 opacity-30"
-                    style={{ width: `${(currentTime / duration) * 100}%` }}
+                    style={{ width: `${(currentTime / getAnalysisDuration()) * 100}%` }}
                   />
 
                   {/* Playhead */}
                   <div
                     className="absolute top-0 bottom-0 w-1 bg-white shadow-lg"
-                    style={{ left: `${(currentTime / duration) * 100}%` }}
+                    style={{ left: `${(currentTime / getAnalysisDuration()) * 100}%` }}
                   />
                 </div>
 
                 <div className="flex justify-between text-xs text-gray-400">
                   <span>{formatTime(currentTime)}</span>
-                  <span>{formatTime(duration)}</span>
+                  <span>{formatTime(getAnalysisDuration())}</span>
                 </div>
               </div>
             </div>

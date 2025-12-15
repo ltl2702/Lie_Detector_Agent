@@ -32,12 +32,40 @@ export default function SessionHistory({ onSelectSession }) {
     return new Date(timestamp * 1000).toLocaleString();
   };
 
-  const formatDuration = (start, end) => {
-    const duration = end - start;
+  // Lấy duration thực tế từ video file (giống ReviewMode)
+  const [videoDurations, setVideoDurations] = useState({}); // { [video_file]: duration }
+  const getAnalysisDuration = (session) => {
+    if (session.video_file && videoDurations[session.video_file]) {
+      return videoDurations[session.video_file];
+    }
+    return 0;
+  };
+  const formatDuration = (duration) => {
     const mins = Math.floor(duration / 60);
     const secs = Math.floor(duration % 60);
     return `${mins}m ${secs}s`;
   };
+
+  // Khi render, load metadata cho tất cả video_file chưa có duration
+  useEffect(() => {
+    sessions.forEach((session) => {
+      if (
+        session.video_file &&
+        !videoDurations[session.video_file]
+      ) {
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.src = `http://localhost:5000/recordings/${session.video_file}`;
+        video.onloadedmetadata = () => {
+          setVideoDurations((prev) => ({
+            ...prev,
+            [session.video_file]: video.duration || 0,
+          }));
+        };
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions]);
 
   return (
     <div className="bg-gray-800 rounded-lg p-6">
@@ -84,17 +112,12 @@ export default function SessionHistory({ onSelectSession }) {
                       <span>{formatDate(session.start_time)}</span>
                     </div>
 
-                    {session.calibration_end_time && (
-                      <div className="flex items-center gap-1">
-                        <Clock className="w-4 h-4" />
-                        <span>
-                          {formatDuration(
-                            session.start_time,
-                            session.calibration_end_time
-                          )}
-                        </span>
-                      </div>
-                    )}
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-4 h-4" />
+                      <span>
+                        {formatDuration(getAnalysisDuration(session))}
+                      </span>
+                    </div>
 
                     <div className="flex items-center gap-1">
                       <TrendingUp className="w-4 h-4" />
