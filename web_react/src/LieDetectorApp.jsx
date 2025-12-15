@@ -293,7 +293,7 @@ export default function LieDetectorApp() {
       setAnalyzing(false);
       setLipCompression(false);
       setGazeDetected(false);
-      
+
       // Reset baseline
       setBaseline({
         bpm: 0,
@@ -304,7 +304,7 @@ export default function LieDetectorApp() {
         calibrated: false,
       });
       setBaselineEmotion(null);
-      
+
       // Reset metrics
       setBpm(0);
       setBlinkMetrics({ rate: 0, count: 0 });
@@ -321,7 +321,7 @@ export default function LieDetectorApp() {
       setDominantEmotion("neutral");
       setEmotionConfidence(0);
       setGestureScore(0);
-      
+
       // Reset detection state
       setTells([]);
       setAlerts([]);
@@ -331,7 +331,7 @@ export default function LieDetectorApp() {
       setStressLevel("LOW STRESS");
       setStressScore(0);
       setStressColor("text-green-400");
-      
+
       // Reset refs
       setSessionVideoBlob(null);
       videoBlobRef.current = null;
@@ -456,12 +456,6 @@ export default function LieDetectorApp() {
     });
 
     let score = 0;
-
-    if (metrics.bpm && metrics.bpm > 40) {
-      setBpm(metrics.bpm);
-      // Cập nhật vào Ref để tính toán delta ở interval sau
-      latestMetricsRef.current.bpm = metrics.bpm;
-    }
 
     // 1. Blink Score
     // Nếu Baseline là 15, thì > 25 là bắt đầu stress (Logic cũ > 35 quá cao)
@@ -730,8 +724,12 @@ export default function LieDetectorApp() {
       // Lưu snapshot phân phối cảm xúc hiện tại để làm mốc so sánh Deviation
       setBaselineEmotion({ ...emotionData });
 
+      const finalBpm = sessionId
+        ? backendBaseline.bpm || 68
+        : 68 + Math.random() * 10;
+
       const finalBaseline = {
-        bpm: backendBaseline.bpm || 68 + Math.random() * 14, // Giữ giả lập hoặc từ backend
+        bpm: finalBpm, // Giữ giả lập hoặc từ backend
         blink_rate: measuredBlinkRate, // Dữ liệu thật
         gaze_stability: backendBaseline.gaze_stability || 0.15,
         emotion: calculatedBaselineEmotion, // Ghi nhận Baseline Emotion là cảm xúc cao nhất lúc này
@@ -762,64 +760,22 @@ export default function LieDetectorApp() {
         const currentStress = stressScoreRef.current || 0; // Stress hiện tại (0-100)
 
         // 1. HEART RATE LOGIC (BPM) - "ADRENALINE RUSH"
-        setBpm((prevBpm) => {
-          let nextBpm = prevBpm;
-          const realBpm = currentMetrics?.bpm;
+        // Update BPM with variation
+        setBpm((prev) => {
+          const variance = (Math.random() - 0.5) * 8;
+          const newBpm = Math.max(50, Math.min(95, prev + variance));
 
-          // A. Ưu tiên dữ liệu thật (nếu có và hợp lệ > 45)
-          if (realBpm && realBpm > 45) {
-            nextBpm = prevBpm * 0.8 + realBpm * 0.2;
-          }
-          // B. Giả lập dựa trên Stress Score
-          else {
-            const base = baseline.bpm || 70;
-
-            // Stress 100 -> Tăng thêm 35 nhịp.
-            // VD: Base 70 -> Target 105. (Đủ lớn để trigger alert > 10)
-            // Với Medium Stress (50) -> Target ~ 87. Delta = 17 (> 10 -> Alert ngay)
-            const stressFactor = (currentStress / 100) * 35;
-            const targetBpm = base + stressFactor;
-
-            const distance = targetBpm - prevBpm;
-
-            // --- CHANGE 2: TỐC ĐỘ PHẢN ỨNG (ADRENALINE) ---
-            let speed = 0.05; // Mặc định: Tăng chậm
-
-            // Nếu Stress đang cao (> 50) và Tim cần tăng -> Tăng tốc gấp 3 lần (0.15)
-            if (currentStress > 50 && distance > 0) {
-              speed = 0.15;
-            }
-            // Nếu Stress giảm -> Tim hồi phục từ từ
-            else if (distance < 0) {
-              speed = 0.1;
-            }
-
-            nextBpm = prevBpm + distance * speed;
-
-            // --- CHANGE 3: ĐỘ RUNG (JITTER) ---
-            // Stress càng cao, tim đập càng loạn (không đều)
-            // Low stress: ±1. High stress: ±3.5
-            const jitter = currentStress > 60 ? 3.5 : 1.2;
-            nextBpm += (Math.random() - 0.5) * jitter;
-          }
-
-          // C. Alert BPM
-          const bpmDelta = nextBpm - baseline.bpm;
-
-          // Ngưỡng Alert: Giữ nguyên 10, nhưng nhờ logic trên nên sẽ dễ chạm ngưỡng này hơn
-          if (Math.abs(bpmDelta) > 10) {
-            const type = bpmDelta > 0 ? "increase" : "decrease";
-            const sign = bpmDelta > 0 ? "+" : "";
-            // TTL 4s: Cảnh báo hiện lâu hơn một chút
+          // Check for significant BPM change
+          const delta = Math.abs(newBpm - baseline.bpm);
+          if (delta > 10 && Math.random() > 0.7) {
+            const changeType = newBpm > baseline.bpm ? "increase" : "decrease";
             addTell(
-              `Heart rate ${type} (${sign}${bpmDelta.toFixed(0)} BPM)`,
-              "bpm_monitor",
-              4
+              `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
+              "bpm"
             );
           }
 
-          // Kẹp giá trị an toàn
-          return Math.max(55, Math.min(160, nextBpm));
+          return newBpm;
         });
 
         // 2. BLINK RATE LOGIC
@@ -1309,13 +1265,15 @@ export default function LieDetectorApp() {
                   </div>
                   {analyzing && (
                     <div className="flex gap-1.5">
-                      <div className={`w-3 h-3 ${
-                        isCalibrating || stressColor.includes("green")
-                          ? "bg-green-400"
-                          : stressColor.includes("yellow")
-                          ? "bg-yellow-400"
-                          : "bg-red-400"
-                      } rounded-full animate-pulse`}></div>
+                      <div
+                        className={`w-3 h-3 ${
+                          isCalibrating || stressColor.includes("green")
+                            ? "bg-green-400"
+                            : stressColor.includes("yellow")
+                            ? "bg-yellow-400"
+                            : "bg-red-400"
+                        } rounded-full animate-pulse`}
+                      ></div>
                       <div
                         className={`w-3 h-3 ${
                           isCalibrating || stressColor.includes("green")
