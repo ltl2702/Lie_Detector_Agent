@@ -761,21 +761,94 @@ export default function LieDetectorApp() {
 
         // 1. HEART RATE LOGIC (BPM) - "ADRENALINE RUSH"
         // Update BPM with variation
-        setBpm((prev) => {
-          const variance = (Math.random() - 0.5) * 8;
-          const newBpm = Math.max(50, Math.min(95, prev + variance));
+        // setBpm((prev) => {
+        //   const variance = (Math.random() - 0.5) * 8;
+        //   const newBpm = Math.max(50, Math.min(95, prev + variance));
 
-          // Check for significant BPM change
-          const delta = Math.abs(newBpm - baseline.bpm);
-          if (delta > 10 && Math.random() > 0.7) {
-            const changeType = newBpm > baseline.bpm ? "increase" : "decrease";
-            addTell(
-              `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
-              "bpm"
-            );
+        //   // Check for significant BPM change
+        //   const delta = Math.abs(newBpm - baseline.bpm);
+        //   if (delta > 10 && Math.random() > 0.7) {
+        //     const changeType = newBpm > baseline.bpm ? "increase" : "decrease";
+        //     addTell(
+        //       `Heart rate ${changeType} (+${delta.toFixed(1)} BPM)`,
+        //       "bpm"
+        //     );
+        //   }
+
+        //   return newBpm;
+        // });
+
+        setBpm((prev) => {
+          const base = baseline.bpm || 70;
+          const currentEmo = currentMetrics.dominantEmotion || "neutral";
+
+          // --- TINH CHỈNH 1: Tăng Offset để cảm xúc tác động mạnh hơn ---
+          let emoOffset = 0;
+          switch (currentEmo) {
+            case "fear":
+              emoOffset = 25; // Tăng mạnh (Cũ 14 -> không đủ kích hoạt alert)
+              break;
+            case "angry":
+              emoOffset = 18; // Tăng khá (Cũ 10)
+              break;
+            case "surprise":
+              emoOffset = 12;
+              break;
+            case "disgust":
+              emoOffset = 8;
+              break;
+            case "happy":
+              emoOffset = 5;
+              break;
+            case "sad":
+              emoOffset = -5;
+              break;
+            case "neutral":
+            default:
+              emoOffset = 0;
+              break;
           }
 
-          return newBpm;
+          // Nếu Stress Level cao, cộng dồn thêm áp lực
+          if (currentStress > 60) {
+            emoOffset += 8;
+          }
+
+          // Noise (biến thiên tự nhiên)
+          const noise = (Math.random() - 0.5) * 4;
+
+          // Tính target
+          const targetBpm = base + emoOffset + noise;
+
+          // Smoothing: Di chuyển nhanh hơn một chút (0.15) để BPM kịp nhảy số theo cảm xúc
+          const smoothedBpm = prev + (targetBpm - prev) * 0.15;
+          const finalBpm = Math.max(50, Math.min(160, smoothedBpm));
+
+          // --- TINH CHỈNH 2: Giảm ngưỡng Trigger & Tăng tỷ lệ xuất hiện ---
+          const delta = Math.abs(finalBpm - baseline.bpm);
+
+          // Ngưỡng cũ là 15, giờ giảm xuống 10 là bắt đầu cảnh báo
+          const alertThreshold = 10;
+
+          if (delta > alertThreshold) {
+            // Logic mới:
+            // Nếu chênh lệch quá lớn (> 20) -> Luôn hiện cảnh báo (hoặc 90% cơ hội)
+            // Nếu chênh lệch vừa (> 10) -> 60% cơ hội (cũ là 20% -> quá ít)
+            const shouldAlert =
+              delta > 20 ? Math.random() > 0.1 : Math.random() > 0.4;
+
+            if (shouldAlert) {
+              const changeType = finalBpm > baseline.bpm ? "Surge" : "Drop"; // Dùng từ mạnh hơn "Increase"
+              addTell(
+                `Heart rate ${changeType}: ${finalBpm.toFixed(
+                  0
+                )} BPM (+${delta.toFixed(0)})`,
+                "bpm"
+              );
+            }
+          }
+
+          return finalBpm;
         });
 
         // 2. BLINK RATE LOGIC
