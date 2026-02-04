@@ -1,71 +1,24 @@
-# Lie Detector Project
+# Lie Detector Agent
 
-A real-time deception detection system using computer vision and machine learning techniques.
+A real-time deception detection system using computer vision and machine learning techniques with advanced session management, web interface, and AI-powered review capabilities.
 
 ## Project Structure
 ```
-d:\Lie-Detector\
-├── src/                    # Source code
-│   ├── main.py            # Main application entry point
+Lie_Detector_Agent/
+├── src/                   # Source code
+│   ├── intercept.py       # Main application entry point
+│   ├── main.py            # Alternative entry point
 │   ├── deception_detection.py  # Core detection algorithms
-│   └── requirements.txt    # Python dependencies
-│   └── README.md           # Detailed technical documentation
-├── venv/                   # Virtual environment
-└── README.md              # This file
+│   ├── web_app.py         # Web application server
+│   ├── review_mode.py     # Session review functionality
+│   ├── memory_system.py   # Memory management system
+│   ├── alert_system.py    # Alert and notification system
+│   ├── utils.py           # Utility functions
+│   ├── requirements.txt   # Python dependencies
+│   └── README.md          # Detailed technical documentation
+├── web_react/             # React web interface
+├── sessions/              # Saved session data
+├── recordings/            # Video recordings
+├── memory/                # Memory storage
+└── README.md             # This file
 ```
-
-## Quick Start
-1. Navigate to `src` folder
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run: `python main.py`
-
-## Documentation
-See `src/README.md` for detailed technical documentation and usage instructions.
-
-## Note
-This is for educational/research purposes. Results should not be used for critical decision-making.
-
-## Lie Detector
-### A Remote-Control Lie Detector
-
-Lie Detector lets you monitor the heart rate and possible 'tells' of deception from any face, including live video calls or recordings.
-
-Video demo and more info [available 
-here](https://youtu.be/5q-BQ2Q_pqI)!
-
-![demo](demo.png)
-
-Lie Detector uses [OpenCV](https://github.com/opencv/opencv-python) and MediaPipe's [Face Mesh](https://google.github.io/mediapipe/solutions/face_mesh.html#python-solution-api) to perform real-time detect of facial landmarks from video input. It also uses [FER](https://pypi.org/project/fer/) for mood detection. From there, relative differences are calculated to determine significant changes in specific facial movements from a person's baseline, including their:
-
-- Heart rate
-- Blink rate
-- Change in gaze
-- Hand covering face
-- Lip compression
-
-Lie Detector can optionally include prompts based on a second video feed to better 'mirror' the original input.
-
-Hit `Q` on the preview window to exit the resulting display frame, or 
-`CTRL+C` at the terminal to close the Python process.
-
-
-**Lie Detector is built for Python 3 and will not run on 2.x.**
-
-
-Optional flags:
-
-- `--help` - Display the below options
-- `--input` - Choose a camera, video file path, or screen dimensions in the form `x y width height` - defaults to device `0`
-- `--landmarks` - Set to any value to draw overlayed facial and hand landmarks
-- `--bpm` - Set to any value to include a heart rate tracking chart
-- `--flip` - Set to any value to flip along the y-axis for a selfie view
-- `--landmarks` - Set to any value to draw detected body landmarks from MediaPipe
-- `--record` - Set to any value to write the output to a timestamped AVI recording in the current folder
-- `--second` - Secondary video input device for mirroring prompts (device number or path)
-- `--ttl` - Number of subsequent frames to display a tell; defaults to 30
-
-Example usage:
-
-- `python intercept.py -h` - Show all argument options
-- `python intercept.py --input 2 --landmarks 1 --flip 1 --record 1` - Camera device 2; overlay landmarks; flip; generate a recording
-- `python intercept.py -i "/Downloads/shakira.mp4" --second 0` - Use video file as input; use camera device 0 as secondary input for mirroring feedback
